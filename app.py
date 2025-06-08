@@ -10,6 +10,7 @@ import time
 from werkzeug.utils import secure_filename
 import threading
 import shutil
+from rembg import remove
 
 app = Flask(__name__)
 CORS(app)
@@ -33,6 +34,46 @@ progress_data = {}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def remove_background_from_video(input_video_path, output_video_path, progress_callback):
+    """Remove background from video using rembg"""
+    cap = cv2.VideoCapture(input_video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+    processed_frames = 0
+    
+    try:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Convert BGR to BGRA for rembg processing
+            frame_rgba = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
+            
+            # Remove background using rembg
+            output = remove(frame_rgba)
+            
+            # Convert back to BGR for video output
+            output_bgr = cv2.cvtColor(output, cv2.COLOR_BGRA2BGR)
+            
+            # Write frame to output video
+            out.write(output_bgr)
+            
+            processed_frames += 1
+            progress_percentage = (processed_frames / frame_count) * 100
+            progress_callback(progress_percentage)
+            
+    except Exception as e:
+        logger.error(f"Error processing video: {e}")
+        raise e
+    finally:
+        cap.release()
+        out.release()
 
 @app.before_request
 def verify_api_key():
@@ -122,87 +163,23 @@ def process_video_background(filename, user_id):
             'message': 'Starting background removal'
         }
         
-        # Open the video
-        cap = cv2.VideoCapture(input_path)
-        if not cap.isOpened():
-            raise Exception("Could not open input video")
-            
-        # Get video properties
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        # Define progress callback function
+        def update_progress(progress_percentage):
+            progress_data[filename] = {
+                'status': 'processing',
+                'progress': min(99, int(progress_percentage)),
+                'message': f'Processing: {int(progress_percentage):.1f}% complete'
+            }
         
-        # Create output video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-        
-        # Process each frame
-        frame_number = 0
-        
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            # Simple background removal (replace with your actual implementation)
-            # In a real implementation, you'd use a proper segmentation model here
-            # This is just a placeholder - a simple green screen effect
-            
-            # Convert to HSV for better color separation
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            
-            # Define range for green color detection
-            lower_green = (40, 40, 40)
-            upper_green = (80, 255, 255)
-            
-            # Create mask for green pixels
-            mask = cv2.inRange(hsv, lower_green, upper_green)
-            
-            # Invert mask for foreground
-            mask_inv = cv2.bitwise_not(mask)
-            
-            # Create transparent background (alpha channel)
-            alpha = mask_inv
-            
-            # Create BGRA image (with transparency)
-            bgra = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
-            bgra[:, :, 3] = alpha
-            
-            # Write to output
-            out.write(cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR))
-            
-            # Update progress
-            frame_number += 1
-            progress = min(99, int((frame_number / frame_count) * 100))
-            
-            if frame_number % 10 == 0:  # Update every 10 frames to reduce overhead
-                progress_data[filename] = {
-                    'status': 'processing',
-                    'progress': progress,
-                    'message': f'Processing frame {frame_number}/{frame_count}'
-                }
-        
-        # Release resources
-        cap.release()
-        out.release()
-        
-        # Final processing
-        progress_data[filename] = {
-            'status': 'finalizing',
-            'progress': 99,
-            'message': 'Finalizing video'
-        }
-        
-        # Convert output to proper format if needed
-        final_output_path = output_path
+        # Process video using the remove_background_from_video function
+        remove_background_from_video(input_path, output_path, update_progress)
         
         # Mark as complete
         progress_data[filename] = {
             'status': 'complete',
             'progress': 100,
             'message': 'Processing complete',
-            'output_path': final_output_path
+            'output_path': output_path
         }
         
         # Clean up original upload
@@ -244,9 +221,8 @@ def process_video():
             args=(filename, user_id)
         ).start()
         
-        # Return the output path directly as binary data
         # Poll for completion
-        max_wait = 300  # 5 minutes max wait
+        max_wait = 600  # 10 minutes max wait (increased for AI processing)
         wait_time = 0
         sleep_interval = 1
         
@@ -295,6 +271,6 @@ def health_check():
     return jsonify({'status': 'ok'})
 
 if __name__ == '__main__':
-    port = 5001
+    port = 5550
     
     app.run(host='0.0.0.0', port=port, debug=True, threaded=True)

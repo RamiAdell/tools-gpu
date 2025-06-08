@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  background-removal-app:
+    build: .
+    ports:
+      - "5550:5550"
+    volumes:
+      - /tmp/uploads:/tmp/uploads
+      - /tmp/processed:/tmp/processed
+    environment:
+      - FLASK_ENV=production
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5550/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

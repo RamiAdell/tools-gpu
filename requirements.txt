@@ -8,3 +8,5 @@ Pillow==10.0.0
 Werkzeug<2.1.0
 itsdangerous
 flask_cors
+onnx>=1.12.0
+onnxruntime-gpu>=1.13.0
