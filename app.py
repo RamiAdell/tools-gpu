@@ -19,7 +19,15 @@ app = Flask(__name__)
 CORS(app)
 
 # Enhanced logging configuration
-
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('/app/app.log')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Configuration
 UPLOAD_FOLDER = '/tmp/uploads'
@@ -37,51 +45,51 @@ progress_data = {}
 # GPU setup and logging
 def setup_gpu():
     """Setup GPU and log system information"""
-    print("=== System Information ===")
-    print(f"Python version: {sys.version}")
-    print(f"PyTorch version: {torch.__version__}")
-    print(f"CUDA available: {torch.cuda.is_available()}")
+    logger.info("=== System Information ===")
+    logger.info(f"Python version: {sys.version}")
+    logger.info(f"PyTorch version: {torch.__version__}")
+    logger.info(f"CUDA available: {torch.cuda.is_available()}")
     
     if torch.cuda.is_available():
-        print(f"CUDA version: {torch.version.cuda}")
-        print(f"GPU count: {torch.cuda.device_count()}")
+        logger.info(f"CUDA version: {torch.version.cuda}")
+        logger.info(f"GPU count: {torch.cuda.device_count()}")
         for i in range(torch.cuda.device_count()):
             gpu_name = torch.cuda.get_device_name(i)
             gpu_memory = torch.cuda.get_device_properties(i).total_memory / (1024**3)
-            print(f"GPU {i}: {gpu_name} ({gpu_memory:.1f}GB)")
+            logger.info(f"GPU {i}: {gpu_name} ({gpu_memory:.1f}GB)")
     else:
-        print("CUDA not available - running on CPU")
+        logger.warning("CUDA not available - running on CPU")
     
     # Check ONNX Runtime providers
     try:
         import onnxruntime as ort
         providers = ort.get_available_providers()
-        print(f"ONNX Runtime providers: {providers}")
+        logger.info(f"ONNX Runtime providers: {providers}")
         if 'CUDAExecutionProvider' in providers:
-            print("CUDA provider available for ONNX Runtime")
+            logger.info("CUDA provider available for ONNX Runtime")
         else:
-            print("CUDA provider NOT available for ONNX Runtime")
+            logger.warning("CUDA provider NOT available for ONNX Runtime")
     except ImportError:
-        print("ONNX Runtime not installed")
+        logger.error("ONNX Runtime not installed")
     
-    print("=== End System Information ===")
+    logger.info("=== End System Information ===")
 
 # Initialize GPU setup
 setup_gpu()
 
 # Initialize rembg session with GPU support
 try:
-    print("Initializing rembg session with GPU support...")
+    logger.info("Initializing rembg session with GPU support...")
     # Create session with explicit GPU provider
     rembg_session = new_session('u2net', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-    print("rembg session initialized successfully with GPU support")
+    logger.info("rembg session initialized successfully with GPU support")
 except Exception as e:
-    print(f"Failed to initialize rembg with GPU, falling back to CPU: {e}")
+    logger.error(f"Failed to initialize rembg with GPU, falling back to CPU: {e}")
     try:
         rembg_session = new_session('u2net')
-        print("rembg session initialized with CPU fallback")
+        logger.info("rembg session initialized with CPU fallback")
     except Exception as e2:
-        print(f"Failed to initialize rembg session: {e2}")
+        logger.error(f"Failed to initialize rembg session: {e2}")
         rembg_session = None
 
 def allowed_file(filename):
@@ -89,7 +97,7 @@ def allowed_file(filename):
 
 def remove_background_from_video(input_video_path, output_video_path, progress_callback):
     """Remove background from video using rembg with GPU acceleration"""
-    print(f"Starting video processing: {input_video_path} -> {output_video_path}")
+    logger.info(f"Starting video processing: {input_video_path} -> {output_video_path}")
     
     if rembg_session is None:
         raise Exception("rembg session not initialized")
@@ -103,14 +111,14 @@ def remove_background_from_video(input_video_path, output_video_path, progress_c
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    print(f"Video properties: {width}x{height}, {fps} fps, {frame_count} frames")
+    logger.info(f"Video properties: {width}x{height}, {fps} fps, {frame_count} frames")
     
     # Use H.264 codec for better compatibility
     fourcc = cv2.VideoWriter_fourcc(*'H264')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height), True)
     
     if not out.isOpened():
-        print("Failed to open output video writer")
+        logger.error("Failed to open output video writer")
         raise Exception("Could not create output video file")
     
     processed_frames = 0
@@ -120,7 +128,7 @@ def remove_background_from_video(input_video_path, output_video_path, progress_c
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
-                print("End of video reached")
+                logger.info("End of video reached")
                 break
             
             try:
@@ -147,7 +155,7 @@ def remove_background_from_video(input_video_path, output_video_path, progress_c
                 # Write frame to output video
                 success = out.write(output_bgr)
                 if not success:
-                    print(f"Failed to write frame {processed_frames}")
+                    logger.error(f"Failed to write frame {processed_frames}")
                 
                 processed_frames += 1
                 progress_percentage = (processed_frames / frame_count) * 100
@@ -156,12 +164,12 @@ def remove_background_from_video(input_video_path, output_video_path, progress_c
                 if processed_frames % 10 == 0:
                     elapsed_time = time.time() - start_time
                     fps_current = processed_frames / elapsed_time if elapsed_time > 0 else 0
-                    print(f"Processed {processed_frames}/{frame_count} frames ({progress_percentage:.1f}%), Current FPS: {fps_current:.1f}")
+                    logger.info(f"Processed {processed_frames}/{frame_count} frames ({progress_percentage:.1f}%), Current FPS: {fps_current:.1f}")
                 
                 progress_callback(progress_percentage)
                 
             except Exception as frame_error:
-                print(f"Error processing frame {processed_frames}: {frame_error}")
+                logger.error(f"Error processing frame {processed_frames}: {frame_error}")
                 # Write original frame if processing fails
                 out.write(frame)
                 processed_frames += 1
@@ -169,13 +177,13 @@ def remove_background_from_video(input_video_path, output_video_path, progress_c
                 progress_callback(progress_percentage)
                 
     except Exception as e:
-        print(f"Error during video processing: {e}")
+        logger.error(f"Error during video processing: {e}")
         raise e
     finally:
         cap.release()
         out.release()
         total_time = time.time() - start_time
-        print(f"Video processing completed: {processed_frames} frames in {total_time:.2f}s (avg {processed_frames/total_time:.1f} fps)")
+        logger.info(f"Video processing completed: {processed_frames} frames in {total_time:.2f}s (avg {processed_frames/total_time:.1f} fps)")
 
 @app.before_request
 def verify_api_key():
@@ -186,29 +194,29 @@ def verify_api_key():
     # Check API key in headers
     api_key = request.headers.get('X-Api-Key')
     if api_key != API_KEY:
-        print(f"Unauthorized access attempt from {request.remote_addr}")
+        logger.warning(f"Unauthorized access attempt from {request.remote_addr}")
         return jsonify({'error': 'Unauthorized'}), 401
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
     """Handle file upload and validation"""
-    print(f"Upload request from {request.remote_addr}")
+    logger.info(f"Upload request from {request.remote_addr}")
     
     if 'file' not in request.files:
-        print("No file part in request")
+        logger.error("No file part in request")
         return jsonify({'success': False, 'error': 'No file part'}), 400
         
     file = request.files['file']
     user_id = request.headers.get('X-User-ID', 'unknown')
     
-    print(f"Upload request from user: {user_id}, filename: {file.filename}")
+    logger.info(f"Upload request from user: {user_id}, filename: {file.filename}")
     
     if file.filename == '':
-        print("No file selected")
+        logger.error("No file selected")
         return jsonify({'success': False, 'error': 'No selected file'}), 400
         
     if not allowed_file(file.filename):
-        print(f"File type not allowed: {file.filename}")
+        logger.error(f"File type not allowed: {file.filename}")
         return jsonify({'success': False, 'error': 'File type not allowed'}), 400
     
     try:
@@ -217,25 +225,25 @@ def upload_file():
         filename = f"{user_id}_{unique_id}_{secure_filename(file.filename)}"
         file_path = os.path.join(UPLOAD_FOLDER, filename)
         
-        print(f"Saving file to: {file_path}")
+        logger.info(f"Saving file to: {file_path}")
         
         # Save the file
         file.save(file_path)
         
         # Check file size
         file_size = os.path.getsize(file_path)
-        print(f"File size: {file_size / (1024*1024):.2f} MB")
+        logger.info(f"File size: {file_size / (1024*1024):.2f} MB")
         
         if file_size > 100 * 1024 * 1024:  # 100MB
             os.remove(file_path)
-            print("File too large")
+            logger.error("File too large")
             return jsonify({'success': False, 'error': 'File too large'}), 400
             
         # Check duration
         cap = cv2.VideoCapture(file_path)
         if not cap.isOpened():
             os.remove(file_path)
-            print("Could not open video file")
+            logger.error("Could not open video file")
             return jsonify({'success': False, 'error': 'Could not open video file'}), 400
             
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -243,11 +251,11 @@ def upload_file():
         duration = frame_count / fps if fps > 0 else 0
         cap.release()
         
-        print(f"Video duration: {duration:.2f} seconds")
+        logger.info(f"Video duration: {duration:.2f} seconds")
         
         if duration > 300:  # 5 minutes max
             os.remove(file_path)
-            print("Video too long")
+            logger.error("Video too long")
             return jsonify({'success': False, 'error': 'Video too long (max 5 minutes)'}), 400
         
         # Initialize progress tracking for this file
@@ -257,7 +265,7 @@ def upload_file():
             'message': 'Upload complete'
         }
         
-        print(f"Upload successful: {filename}")
+        logger.info(f"Upload successful: {filename}")
         
         return jsonify({
             'success': True,
@@ -267,19 +275,19 @@ def upload_file():
         })
         
     except Exception as e:
-        print(f"Upload error: {str(e)}", exc_info=True)
+        logger.error(f"Upload error: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 def process_video_background(filename, user_id):
     """Background removal processing function"""
-    print(f"Starting background processing for {filename} (user: {user_id})")
+    logger.info(f"Starting background processing for {filename} (user: {user_id})")
     
     try:
         input_path = os.path.join(UPLOAD_FOLDER, filename)
         output_filename = f"processed_{filename}"
         output_path = os.path.join(PROCESSED_FOLDER, output_filename)
         
-        print(f"Processing: {input_path} -> {output_path}")
+        logger.info(f"Processing: {input_path} -> {output_path}")
         
         # Update progress
         progress_data[filename] = {
@@ -307,17 +315,17 @@ def process_video_background(filename, user_id):
             'output_path': output_path
         }
         
-        print(f"Processing completed successfully for {filename}")
+        logger.info(f"Processing completed successfully for {filename}")
         
         # Clean up original upload
         try:
             os.remove(input_path)
-            print(f"Cleaned up original file: {input_path}")
+            logger.info(f"Cleaned up original file: {input_path}")
         except Exception as cleanup_error:
-            print(f"Could not clean up original file: {cleanup_error}")
+            logger.warning(f"Could not clean up original file: {cleanup_error}")
             
     except Exception as e:
-        print(f"Processing error for {filename}: {str(e)}", exc_info=True)
+        logger.error(f"Processing error for {filename}: {str(e)}", exc_info=True)
         progress_data[filename] = {
             'status': 'error',
             'progress': 0,
@@ -327,27 +335,27 @@ def process_video_background(filename, user_id):
 @app.route('/process', methods=['POST'])
 def process_video():
     """Start video processing"""
-    print(f"Process request from {request.remote_addr}")
+    logger.info(f"Process request from {request.remote_addr}")
     
     try:
         data = request.get_json()
         if not data:
-            print("No data provided in process request")
+            logger.error("No data provided in process request")
             return jsonify({'error': 'No data provided'}), 400
             
         filename = data.get('filename')
         user_id = data.get('user_id', 'unknown')
         
-        print(f"Process request: filename={filename}, user_id={user_id}")
+        logger.info(f"Process request: filename={filename}, user_id={user_id}")
         
         if not filename:
-            print("No filename provided")
+            logger.error("No filename provided")
             return jsonify({'error': 'Filename required'}), 400
             
         # Check if file exists
         file_path = os.path.join(UPLOAD_FOLDER, filename)
         if not os.path.exists(file_path):
-            print(f"File not found: {file_path}")
+            logger.error(f"File not found: {file_path}")
             return jsonify({'error': 'File not found'}), 404
             
         # Start processing in background thread
@@ -356,42 +364,42 @@ def process_video():
             args=(filename, user_id)
         )
         processing_thread.start()
-        print(f"Started processing thread for {filename}")
+        logger.info(f"Started processing thread for {filename}")
         
         # Poll for completion
         max_wait = 600  # 10 minutes max wait
         wait_time = 0
         sleep_interval = 1
         
-        print(f"Polling for completion (max {max_wait}s)")
+        logger.info(f"Polling for completion (max {max_wait}s)")
         
         while wait_time < max_wait:
             progress = progress_data.get(filename, {})
             status = progress.get('status')
             
             if status == 'complete':
-                print(f"Processing completed for {filename}")
+                logger.info(f"Processing completed for {filename}")
                 output_path = progress.get('output_path')
                 if os.path.exists(output_path):
                     return send_file(output_path, as_attachment=True, 
                                     download_name=f"processed_{filename}")
                 else:
-                    print(f"Output file not found: {output_path}")
+                    logger.error(f"Output file not found: {output_path}")
                     return jsonify({'error': 'Output file not found'}), 500
                     
             elif status == 'error':
                 error_msg = progress.get('message', 'Unknown error')
-                print(f"Processing failed for {filename}: {error_msg}")
+                logger.error(f"Processing failed for {filename}: {error_msg}")
                 return jsonify({'error': error_msg}), 500
                 
             time.sleep(sleep_interval)
             wait_time += sleep_interval
             
-        print(f"Processing timeout for {filename} after {max_wait}s")
+        logger.error(f"Processing timeout for {filename} after {max_wait}s")
         return jsonify({'error': 'Processing timeout'}), 408
         
     except Exception as e:
-        print(f"Process request error: {str(e)}", exc_info=True)
+        logger.error(f"Process request error: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/progress', methods=['GET'])
@@ -444,5 +452,5 @@ def gpu_status():
 
 if __name__ == '__main__':
     port = 5550
-    print(f"Starting Flask app on port {port}")
+    logger.info(f"Starting Flask app on port {port}")
     app.run(host='0.0.0.0', port=port, debug=True, threaded=True)
