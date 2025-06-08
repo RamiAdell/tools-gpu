@@ -16,12 +16,19 @@ RUN apt-get update && \
     gcc \
     g++ \
     ffmpeg \
+    libavcodec-dev \
+    libavformat-dev \
+    libswscale-dev \
+    libgstreamer-plugins-base1.0-dev \
+    libgstreamer1.0-dev \
     libgl1 \
     libsm6 \
     libxext6 \
     libxrender-dev \
     libglib2.0-0 \
     libgomp1 \
+    libx264-dev \
+    x264 \
     wget \
     curl \
     && rm -rf /var/lib/apt/lists/*
@@ -59,9 +66,6 @@ ENV FLASK_ENV=production
 # Expose port
 EXPOSE 5550
 
-# Add health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5550/health || exit 1
 
 # Use gunicorn with proper logging and GPU-friendly settings
 CMD ["gunicorn", "--bind", "0.0.0.0:5550", "--workers", "1", "--threads", "4", "--timeout", "1800", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "info", "app:app"]
