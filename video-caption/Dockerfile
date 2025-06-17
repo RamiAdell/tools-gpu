@@ -59,7 +59,7 @@ RUN mkdir -p /app/fonts
 
 # Copy your font files into the /app/fonts directory in the container
 # Ensure these paths are relative to the Dockerfile's location
-# COPY ./fonts/ /app/fonts/
+COPY ./fonts/ /app/fonts/
 
 # Set environment variables
 ENV FLASK_APP=app.py
