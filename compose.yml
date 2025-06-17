@@ -41,13 +41,13 @@ services:
   #     timeout: 10s
   #     retries: 3
 
-  video-caption-gpu-alternative:
+video-caption-gpu-alternative:
     build:
       context: ./video-caption
       dockerfile: Dockerfile
     container_name: video-caption-gpu-alt
     restart: unless-stopped
-    runtime: nvidia  # Add this line explicitly
+    runtime: nvidia
     deploy:
       resources:
         reservations:
@@ -72,6 +72,12 @@ services:
       - MAX_VIDEO_DURATION_SECONDS=600
       - WHISPER_MODEL_SIZE=small
       - TORCH_HOME=/app/.cache/torch
+      # Critical: Force single-threaded execution to avoid CUDA forking issues
+      - OMP_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+      - NUMEXPR_NUM_THREADS=1
+      # Disable multiprocessing for moviepy and other libraries
+      - CUDA_LAUNCH_BLOCKING=1
     volumes:
       - /tmp/caption_uploads:/tmp/caption_uploads
       - /tmp/caption_processed:/tmp/caption_processed
@@ -85,4 +91,3 @@ services:
 
 volumes:
   caption_cache:
-    driver: local

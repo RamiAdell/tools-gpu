@@ -1,7 +1,8 @@
-import multiprocessing as mp
+import multiprocessing 
 # MUST be before any CUDA imports
-mp.set_start_method('spawn', force=True)
-
+ 
+if __name__ == '__main__':
+    multiprocessing.set_start_method('spawn', force=True)
 import os
 import uuid
 import json
@@ -29,7 +30,10 @@ from pydub.utils import mediainfo # type: ignore
 
 # GPU Support - import after multiprocessing setup
 import torch
-
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 # --- Flask App Setup ---
 app = Flask(__name__)
 CORS(app)
@@ -609,6 +613,7 @@ def stream_progress_sse():
 
 
 if __name__ == '__main__':
+
     # Test GPU availability first
     logger.info("=== GPU Setup Test ===")
     logger.info(f"PyTorch version: {torch.__version__}")
@@ -618,3 +623,4 @@ if __name__ == '__main__':
         logger.info(f"CUDA version: {torch.version.cuda}")
         logger.info(f"GPU count: {torch.cuda.device_count()}")
         logger.info(f"Current GPU: {torch.cuda.current_device()}")
+    app.run(host='0.0.0.0', port=5003, debug=False, threaded=True)

@@ -1,5 +1,4 @@
 # Use NVIDIA CUDA base image with Python
-# This provides CUDA runtime and development tools
 FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 
 # Prevent interactive prompts during package installation
@@ -19,14 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     curl \
     git \
-    # Additional libraries that might be needed
     libgl1-mesa-glx \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender-dev \
     libgomp1 \
-    # Clean up to reduce image size
     && rm -rf /var/lib/apt/lists/*
 
 # Create symbolic links for python3.10
@@ -39,33 +36,29 @@ RUN python3 -m pip install --upgrade pip
 # Copy the requirements file into the container
 COPY requirements.txt .
 
-# Install Python dependencies with GPU support
-# Install PyTorch with CUDA support first
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# Install PyTorch with CUDA support first (matching your CUDA 12.1)
+RUN pip install --no-cache-dir torch==2.1.2+cu121 torchvision==0.16.2+cu121 torchaudio==2.1.2+cu121 --index-url https://download.pytorch.org/whl/cu121
 
 # Install other Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir moviepy
 
-# Install OpenAI Whisper with all dependencies
+# Install OpenAI Whisper
 RUN pip install --no-cache-dir openai-whisper
 
 # Copy the Flask application code into the container
 COPY . /app
 
-# --- Font Handling ---
-# Create a directory for fonts if it doesn't exist
-RUN mkdir -p /app/fonts
+# Create directories
+RUN mkdir -p /app/fonts /app/.cache/torch /app/.cache/whisper
 
-# Copy your font files into the /app/fonts directory in the container
-# Ensure these paths are relative to the Dockerfile's location
+# Copy font files
 COPY ./fonts/ /app/fonts/
 
 # Set environment variables
 ENV FLASK_APP=app.py
 ENV FLASK_RUN_HOST=0.0.0.0
 ENV FLASK_RUN_PORT=5003
-ENV PYTHONUNBUFFERED=1  
+ENV PYTHONUNBUFFERED=1
 ENV FONT_FOLDER=/app/fonts
 
 # GPU-specific environment variables
@@ -74,27 +67,27 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV CUDA_VISIBLE_DEVICES=0
 ENV NCCL_P2P_DISABLE=1
 ENV TOKENIZERS_PARALLELISM=false
+
+# Critical: Prevent CUDA forking issues
+ENV OMP_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV NUMEXPR_NUM_THREADS=1
+ENV CUDA_LAUNCH_BLOCKING=1
+
 # Whisper model configuration
 ENV WHISPER_MODEL_SIZE=small
 ENV TORCH_HOME=/app/.cache/torch
 
-# Create cache directories
-RUN mkdir -p /app/.cache/torch /app/.cache/whisper
-
 # Set proper permissions
 RUN chmod -R 755 /app
 
-# Expose the port the app runs on
+# Expose the port
 EXPOSE 5003
 
-# Health check to ensure the service is running and GPU is accessible
+# Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:5003/health || exit 1
 
-# Use Gunicorn for production with GPU-optimized settings
-# Reduce worker count for GPU workloads to avoid memory issues
-# Increase timeout for video processing tasks
-# Replace CMD with:
-CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--workers", "1", "--threads", "1", "--preload", "app:app"]
-# Alternative: Use Flask development server (not recommended for production)
-# CMD ["python", "app.py"]
+# Use Gunicorn with spawn method to avoid CUDA forking issues
+# Single worker to prevent multiprocessing issues with CUDA
+CMD ["python", "-c", "import multiprocessing; multiprocessing.set_start_method('spawn', force=True); import app; app.app.run(host='0.0.0.0', port=5003, threaded=True)"]
