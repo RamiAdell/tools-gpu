@@ -19,7 +19,7 @@ def test_gpu():
             return jsonify({"success": False, "error": "CUDA not available"})
         
         # Simple GPU operation
-        x = torch.rand(1000, 1000).cuda()
+        x = torch.rand(10000, 10000).cuda()
         y = torch.mm(x, x)
         return jsonify({"success": True, "result_sum": y.sum().item()})
     except Exception as e:
