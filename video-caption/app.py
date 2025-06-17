@@ -575,7 +575,9 @@ if __name__ == '__main__':
         logger.info(f"CUDA version: {torch.version.cuda}")
         logger.info(f"GPU count: {torch.cuda.device_count()}")
         logger.info(f"Current GPU: {torch.cuda.current_device()}")
-        logger.info(f"GPU name: {torch.cuda.get_device_properties(0).name}")
+        logger.info(f"CUDA Devices: {[torch.cuda.get_device_properties(i).name for i in range(torch.cuda.device_count())]}")
+    else:
+        logger.warning("No CUDA devices found. Running on CPU.")
     
     # Preload Whisper model on startup
     try:

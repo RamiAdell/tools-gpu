@@ -14,7 +14,7 @@ services:
               count: all
               capabilities: [gpu]
     runtime: nvidia
-
+    
   background-removal-app:
     build:
       context: ./v-bg-remover
@@ -47,6 +47,7 @@ services:
       dockerfile: Dockerfile
     container_name: video-caption-gpu-alt
     restart: unless-stopped
+    runtime: nvidia  # Add this line explicitly
     deploy:
       resources:
         reservations:

@@ -1,6 +1,5 @@
 # Use NVIDIA CUDA base image with Python
-# This provides CUDA runtime and development tools
-FROM nvidia/cuda:12.1.0-devel-ubuntu22.04
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -36,12 +35,11 @@ RUN ln -sf /usr/bin/python3.10 /usr/bin/python3 && \
 # Upgrade pip
 RUN python3 -m pip install --upgrade pip
 
+# Install PyTorch with CUDA support first (explicit version matching your CUDA)
+RUN pip install --no-cache-dir torch torchaudio --extra-index-url https://download.pytorch.org/whl/cu121
+
 # Copy the requirements file into the container
 COPY requirements.txt .
-
-# Install Python dependencies with GPU support
-# Install PyTorch with CUDA support first
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 # Install other Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -95,6 +93,6 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
 # Reduce worker count for GPU workloads to avoid memory issues
 # Increase timeout for video processing tasks
 # Replace CMD with:
-CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--workers", "1", "--threads", "1", "--preload", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--workers", "1", "--threads", "1", "--timeout", "300", "--preload", "app:app"]
 # Alternative: Use Flask development server (not recommended for production)
 # CMD ["python", "app.py"]
