@@ -1,12 +1,14 @@
 import multiprocessing as mp
-mp.set_start_method('spawn', force=True)  # Must be first!
+# MUST be before any CUDA imports
+mp.set_start_method('spawn', force=True)
+
 import os
 import uuid
 import json
 import logging
 import tempfile 
 import time
-import threading # Not used for main path in single endpoint, but run_captioning_pipeline could still be structured for clarity
+import threading
 import shutil
 
 from flask import Flask, request, jsonify, Response, send_file, make_response
@@ -25,7 +27,7 @@ import whisper # type: ignore
 from deep_translator import GoogleTranslator # type: ignore
 from pydub.utils import mediainfo # type: ignore
 
-# GPU Support
+# GPU Support - import after multiprocessing setup
 import torch
 
 # --- Flask App Setup ---
@@ -36,26 +38,51 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- GPU Configuration ---
-# Check for GPU availability and set device
-if torch.cuda.is_available():
-    device = "cuda"
-    gpu_info = torch.cuda.get_device_properties(0)
-    logger.info(f"GPU detected: {gpu_info.name} with {gpu_info.total_memory / 1024**3:.1f} GB memory")
-    logger.info(f"CUDA version: {torch.version.cuda}")
-    logger.info(f"PyTorch CUDA version: {torch.version.cuda}")
-    logger.info(f"Current CUDA device: {torch.cuda.current_device()}")
-else:
-    device = "cpu"
-    logger.warning("No GPU detected, using CPU for processing")
+# --- GPU Configuration with improved error handling ---
+device = "cpu"  # Default fallback
+gpu_info = None
+cuda_available = False
 
-# Set memory allocation strategy for GPU
-if device == "cuda":
-    torch.cuda.empty_cache()
-    # Set memory fraction to avoid OOM errors
-    torch.cuda.set_per_process_memory_fraction(0.8)
-    # Ensure CUDA is initialized
-    torch.cuda.init()
+def initialize_cuda():
+    """Initialize CUDA with proper error handling"""
+    global device, gpu_info, cuda_available
+    
+    try:
+        cuda_available = torch.cuda.is_available()
+        if cuda_available:
+            # Test CUDA initialization
+            torch.cuda.init()
+            device = "cuda"
+            gpu_info = torch.cuda.get_device_properties(0)
+            logger.info(f"GPU detected: {gpu_info.name} with {gpu_info.total_memory / 1024**3:.1f} GB memory")
+            logger.info(f"CUDA version: {torch.version.cuda}")
+            logger.info(f"PyTorch CUDA version: {torch.version.cuda}")
+            logger.info(f"Current CUDA device: {torch.cuda.current_device()}")
+            
+            # Set memory allocation strategy for GPU
+            torch.cuda.empty_cache()
+            torch.cuda.set_per_process_memory_fraction(0.8)
+            
+            # Test CUDA operations
+            test_tensor = torch.randn(10).cuda()
+            _ = test_tensor.cpu()  # Simple operation test
+            del test_tensor
+            torch.cuda.empty_cache()
+            
+            logger.info("CUDA initialization successful")
+            
+        else:
+            logger.warning("No GPU detected, using CPU for processing")
+            device = "cpu"
+            
+    except Exception as e:
+        logger.error(f"CUDA initialization failed: {e}")
+        logger.warning("Falling back to CPU processing")
+        device = "cpu"
+        cuda_available = False
+
+# Initialize CUDA outside of request context
+initialize_cuda()
 
 # --- Configuration (same as before) ---
 UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', '/tmp/caption_uploads')
@@ -72,19 +99,20 @@ os.makedirs(FONT_FOLDER, exist_ok=True)
 
 # Update your font paths to include extensions
 font_paths_to_try = [
-    os.path.join(FONT_FOLDER, "Poppins-Bold.ttf"),  # Added .ttf
-    "Poppins-Bold.ttf",  # System font with extension
+    os.path.join(FONT_FOLDER, "Poppins-Bold.ttf"),
+    "Poppins-Bold.ttf",
     os.path.join(FONT_FOLDER, "Arial.ttf"),
     "arial.ttf",
 ]
 
 # Add debug logging
 logger.debug(f"Looking for fonts in: {FONT_FOLDER}")
-logger.debug(f"Font files present: {os.listdir(FONT_FOLDER)}")
+if os.path.exists(FONT_FOLDER):
+    logger.debug(f"Font files present: {os.listdir(FONT_FOLDER)}")
 
 # Global Whisper model - load once and reuse
 whisper_model = None
-whisper_model_size = os.getenv('WHISPER_MODEL_SIZE', 'small')  # Can be: tiny, base, small, medium, large
+whisper_model_size = os.getenv('WHISPER_MODEL_SIZE', 'small')
 
 def load_whisper_model():
     """Load Whisper model with GPU support if available"""
@@ -93,63 +121,60 @@ def load_whisper_model():
         try:
             logger.info(f"Loading Whisper model '{whisper_model_size}' on device: {device}")
             
-            # Force GPU usage if available
-            if device == "cuda":
-                # Ensure CUDA is available and working
-                if not torch.cuda.is_available():
-                    raise RuntimeError("CUDA is not available")
-                
-                # Set the device explicitly
-                torch.cuda.set_device(0)
-                logger.info(f"Set CUDA device to: {torch.cuda.current_device()}")
-                
-                # Load model with explicit device parameter
-                whisper_model = whisper.load_model(whisper_model_size, device="cuda")
-                
-                # Verify the model is on GPU
-                model_device = next(whisper_model.parameters()).device
-                logger.info(f"Whisper model loaded on device: {model_device}")
-                
-                if model_device.type != 'cuda':
-                    logger.warning(f"Model loaded on {model_device} instead of CUDA")
-                    # Try to move model to GPU
-                    whisper_model = whisper_model.cuda()
-                    logger.info(f"Moved model to GPU: {next(whisper_model.parameters()).device}")
-                
+            if device == "cuda" and cuda_available:
+                try:
+                    # Ensure CUDA is properly initialized
+                    torch.cuda.empty_cache()
+                    torch.cuda.init()
+                    
+                    # Set the device explicitly
+                    torch.cuda.set_device(0)
+                    logger.info(f"Set CUDA device to: {torch.cuda.current_device()}")
+                    
+                    # Load model with explicit device parameter
+                    whisper_model = whisper.load_model(whisper_model_size, device="cuda")
+                    
+                    # Verify the model is on GPU
+                    model_device = next(whisper_model.parameters()).device
+                    logger.info(f"Whisper model loaded on device: {model_device}")
+                    
+                    if model_device.type != 'cuda':
+                        logger.warning(f"Model loaded on {model_device} instead of CUDA, moving to GPU")
+                        whisper_model = whisper_model.cuda()
+                        logger.info(f"Moved model to GPU: {next(whisper_model.parameters()).device}")
+                    
+                    # Test GPU memory after loading
+                    logger.info(f"GPU memory after model loading:")
+                    logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+                    logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
+                    
+                except Exception as cuda_error:
+                    logger.error(f"Failed to load Whisper model on GPU: {cuda_error}")
+                    logger.info("Falling back to CPU")
+                    whisper_model = whisper.load_model(whisper_model_size, device="cpu")
+                    
             else:
                 whisper_model = whisper.load_model(whisper_model_size, device="cpu")
                 logger.info("Whisper model loaded on CPU")
-            
-            # Test GPU memory after loading
-            if device == "cuda":
-                logger.info(f"GPU memory after model loading:")
-                logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
-                logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
 
         except Exception as e:
-            logger.error(f"Failed to load Whisper model on {device}: {e}")
-            # Fallback to CPU if GPU loading fails
-            if device == "cuda":
-                logger.info("Attempting to load Whisper model on CPU as fallback")
-                try:
-                    whisper_model = whisper.load_model(whisper_model_size, device="cpu")
-                    logger.info("Whisper model loaded on CPU as fallback")
-                except Exception as e_cpu:
-                    logger.error(f"Failed to load Whisper model on CPU: {e_cpu}")
-                    raise e_cpu
-            else:
-                raise e
+            logger.error(f"Failed to load Whisper model: {e}")
+            raise e
+            
     return whisper_model
 
 def ensure_model_on_gpu():
     """Ensure the Whisper model is on GPU before inference"""
     global whisper_model
-    if whisper_model is not None and device == "cuda":
-        model_device = next(whisper_model.parameters()).device
-        if model_device.type != 'cuda':
-            logger.info(f"Moving model from {model_device} to GPU")
-            whisper_model = whisper_model.cuda()
-            logger.info(f"Model now on: {next(whisper_model.parameters()).device}")
+    if whisper_model is not None and device == "cuda" and cuda_available:
+        try:
+            model_device = next(whisper_model.parameters()).device
+            if model_device.type != 'cuda':
+                logger.info(f"Moving model from {model_device} to GPU")
+                whisper_model = whisper_model.cuda()
+                logger.info(f"Model now on: {next(whisper_model.parameters()).device}")
+        except Exception as e:
+            logger.error(f"Error ensuring model on GPU: {e}")
 
 # --- Helper Functions (same as before) ---
 def allowed_file(filename):
@@ -173,7 +198,7 @@ def get_video_duration(file_path):
             logger.error(f"OpenCV duration error for {file_path}: {e_cv2}")
             return 0
 
-def format_whisper_timestamp(seconds): # Copied for completeness
+def format_whisper_timestamp(seconds):
     assert seconds >= 0, "non-negative timestamp expected"
     milliseconds = round(seconds * 1000.0)
     hours = milliseconds // 3_600_000; milliseconds %= 3_600_000
@@ -199,7 +224,7 @@ def _audio_to_text(wav_path, srt_path, job_id_log_prefix=""):
         ensure_model_on_gpu()
         
         # Log GPU status before transcription
-        if device == "cuda":
+        if device == "cuda" and cuda_available:
             logger.info(f"{job_id_log_prefix} GPU memory before transcription:")
             logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
             logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
@@ -209,12 +234,12 @@ def _audio_to_text(wav_path, srt_path, job_id_log_prefix=""):
         start_time = time.time()
         
         # Set FP16 based on device - GPU can use FP16 for faster processing
-        use_fp16 = device == "cuda"
+        use_fp16 = device == "cuda" and cuda_available
         
         result = model.transcribe(
             wav_path, 
             fp16=use_fp16,
-            verbose=False  # Reduce logging noise
+            verbose=False
         )
         
         processing_time = time.time() - start_time
@@ -229,7 +254,7 @@ def _audio_to_text(wav_path, srt_path, job_id_log_prefix=""):
         logger.info(f"{job_id_log_prefix} Transcription complete. SRT saved to {srt_path}")
         
         # Log GPU status after transcription and clear cache
-        if device == "cuda":
+        if device == "cuda" and cuda_available:
             logger.info(f"{job_id_log_prefix} GPU memory after transcription:")
             logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
             logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
@@ -278,9 +303,9 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
         font = None
         font_paths_to_try = [
             os.path.join(FONT_FOLDER, font_name),
-            font_name,  # Try system font
+            font_name,
             os.path.join(FONT_FOLDER, "Arial.ttf"),
-            "arial.ttf",  # Common system fallback
+            "arial.ttf",
             os.path.join(FONT_FOLDER, "LiberationSans-Regular.ttf")
         ]
         
@@ -347,8 +372,8 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
                 
                 # Draw each line with stroke/border
                 stroke_width = 2
-                stroke_color = (0, 0, 0)  # Black stroke
-                text_color = tuple(int(font_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))  # Hex to RGB
+                stroke_color = (0, 0, 0)
+                text_color = tuple(int(font_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
                 
                 for i, line in enumerate(lines):
                     if not line:
@@ -370,7 +395,7 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
             
             except Exception as e:
                 logger.error(f"{job_id_log_prefix} Error processing frame at {t}s: {str(e)}")
-                return get_frame(t)  # Return original frame on error
+                return get_frame(t)
         
         # Process video with progress tracking
         logger.info(f"{job_id_log_prefix} Starting video processing...")
@@ -406,7 +431,7 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
 # --- Flask Middleware (API Key Check) ---
 @app.before_request
 def verify_api_key_middleware():
-    if request.path in ['/health', '/gpu-status']: # Allow health check and GPU status without key
+    if request.path in ['/health', '/gpu-status']:
         return
     api_key = request.headers.get('X-Api-Key')
     if api_key != SERVICE_API_KEY:
@@ -418,7 +443,7 @@ def verify_api_key_middleware():
 def gpu_status():
     """Get GPU status and information"""
     status = {
-        'gpu_available': torch.cuda.is_available(),
+        'gpu_available': cuda_available,
         'device': device,
         'whisper_model_loaded': whisper_model is not None,
         'whisper_model_size': whisper_model_size,
@@ -426,11 +451,11 @@ def gpu_status():
         'cuda_version': torch.version.cuda if torch.cuda.is_available() else None
     }
 
-    if device == "cuda" and torch.cuda.is_available():
+    if device == "cuda" and cuda_available:
         try:
             status.update({
-                'gpu_name': torch.cuda.get_device_properties(0).name,
-                'gpu_memory_total': torch.cuda.get_device_properties(0).total_memory,
+                'gpu_name': gpu_info.name if gpu_info else "Unknown",
+                'gpu_memory_total': gpu_info.total_memory if gpu_info else 0,
                 'gpu_memory_allocated': torch.cuda.memory_allocated(0),
                 'gpu_memory_cached': torch.cuda.memory_reserved(0),
                 'current_device': torch.cuda.current_device(),
@@ -445,6 +470,7 @@ def gpu_status():
             
         except Exception as e:
             status['gpu_error'] = str(e)
+            logger.error(f"Error getting GPU status: {e}")
 
     return jsonify(status), 200
 
@@ -454,7 +480,7 @@ def process_video_directly():
     Single endpoint to receive video and parameters, process it, and stream back the result.
     """
     user_id = request.headers.get('X-User-ID', 'unknown_user')
-    job_id_log_prefix = f"[DirectProcess-{user_id}-{uuid.uuid4().hex[:8]}]" # Unique ID for logging this specific job
+    job_id_log_prefix = f"[DirectProcess-{user_id}-{uuid.uuid4().hex[:8]}]"
     logger.info(f"{job_id_log_prefix} Direct processing request received for user: {user_id}")
 
     if 'video_file' not in request.files:
@@ -482,7 +508,6 @@ def process_video_directly():
         return jsonify({'success': False, 'error': 'Error parsing caption parameters.'}), 400
 
     original_secure_filename = secure_filename(video_file_storage.filename)
-    # Use a unique name for the temporary uploaded file
     temp_input_filename = f"{user_id}_{uuid.uuid4().hex}_temp_{original_secure_filename}"
     temp_input_filepath = os.path.join(UPLOAD_FOLDER, temp_input_filename)
 
@@ -504,7 +529,7 @@ def process_video_directly():
             raise ValueError(f'File too large (max {MAX_FILE_SIZE_MB // (1024*1024)}MB).')
         
         duration_seconds = get_video_duration(temp_input_filepath)
-        if duration_seconds == 0 and file_size > 1000: # Check for valid video
+        if duration_seconds == 0 and file_size > 1000:
              raise ValueError('Invalid video file or could not determine duration.')
         if duration_seconds > MAX_VIDEO_DURATION_SECONDS:
             raise ValueError(f'Video too long (max {MAX_VIDEO_DURATION_SECONDS // 60} minutes).')
@@ -512,8 +537,8 @@ def process_video_directly():
         logger.info(f"{job_id_log_prefix} Video validated. Duration: {duration_seconds:.2f}s. Starting pipeline on {device}.")
         
         # Ensure GPU is ready before processing
-        if device == "cuda":
-            torch.cuda.empty_cache()  # Clear cache before processing
+        if device == "cuda" and cuda_available:
+            torch.cuda.empty_cache()
             ensure_model_on_gpu()
 
         # --- Execute processing pipeline synchronously ---
@@ -530,16 +555,16 @@ def process_video_directly():
         response = make_response(send_file(
             final_output_video_path,
             as_attachment=True,
-            download_name=f"captioned_{original_secure_filename}" # Suggest a nice name for client
+            download_name=f"captioned_{original_secure_filename}"
         ))
         # Send video duration back to Django for usage tracking
         response.headers['X-Video-Duration-Seconds'] = str(int(duration_seconds))
-        response.headers['X-GPU-Used'] = str(device)  # Indicate which device was used
-        response.headers['Content-Type'] = 'video/mp4' # Explicitly set content type
+        response.headers['X-GPU-Used'] = str(device)
+        response.headers['Content-Type'] = 'video/mp4'
 
         return response
 
-    except ValueError as ve: # Catch specific validation errors
+    except ValueError as ve:
         logger.error(f"{job_id_log_prefix} Validation error: {str(ve)}", exc_info=True)
         return jsonify({'success': False, 'error': str(ve)}), 400
     except Exception as e:
@@ -556,7 +581,7 @@ def process_video_directly():
                     logger.warning(f"{job_id_log_prefix} Could not clean up file {f_path}: {e_clean}")
         
         # Clear GPU cache after processing
-        if device == "cuda":
+        if device == "cuda" and cuda_available:
             torch.cuda.empty_cache()
 
 @app.route('/health', methods=['GET'])
@@ -564,7 +589,7 @@ def health_check():
     return jsonify({
         'status': 'ok', 
         'message': 'Video Captioning Service is running.',
-        'gpu_available': torch.cuda.is_available(),
+        'gpu_available': cuda_available,
         'device': device,
         'model_loaded': whisper_model is not None,
         'model_device': str(next(whisper_model.parameters()).device) if whisper_model else None
@@ -573,7 +598,7 @@ def health_check():
 @app.route('/progress', methods=['GET'])
 def stream_progress_sse():
     """Server-Sent Events endpoint for real-time progress updates (if used)."""
-    target_filename = request.args.get('filename') # This would need to be a job_id now
+    target_filename = request.args.get('filename')
 
     def generate_progress_events():
         yield f"event: connection\ndata: {json.dumps({'message': 'Connected to progress stream.'})}\n\n"
@@ -588,25 +613,8 @@ if __name__ == '__main__':
     logger.info("=== GPU Setup Test ===")
     logger.info(f"PyTorch version: {torch.__version__}")
     logger.info(f"CUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
+    logger.info(f"Using device: {device}")
+    if cuda_available:
         logger.info(f"CUDA version: {torch.version.cuda}")
         logger.info(f"GPU count: {torch.cuda.device_count()}")
         logger.info(f"Current GPU: {torch.cuda.current_device()}")
-        logger.info(f"GPU name: {torch.cuda.get_device_properties(0).name}")
-    
-    # Preload Whisper model on startup
-    try:
-        logger.info("Preloading Whisper model...")
-        load_whisper_model()
-        logger.info("Whisper model preloaded successfully")
-        if whisper_model:
-            test_audio = torch.randn(1, 16000).to(device)  # Fake audio
-            print(next(whisper_model.parameters()).device)  # Should print "cuda:0"
-        if whisper_model and device == "cuda":
-            model_device = next(whisper_model.parameters()).device
-            logger.info(f"Model confirmed on device: {model_device}")
-    except Exception as e:
-        logger.error(f"Failed to preload Whisper model: {e}")
-    
-    port = 5003
-    app.run(host='0.0.0.0', port=port, debug=os.getenv('FLASK_DEBUG', 'True').lower() == 'true', threaded=True)
