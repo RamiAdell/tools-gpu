@@ -42,6 +42,8 @@ if torch.cuda.is_available():
     gpu_info = torch.cuda.get_device_properties(0)
     logger.info(f"GPU detected: {gpu_info.name} with {gpu_info.total_memory / 1024**3:.1f} GB memory")
     logger.info(f"CUDA version: {torch.version.cuda}")
+    logger.info(f"PyTorch CUDA version: {torch.version.cuda}")
+    logger.info(f"Current CUDA device: {torch.cuda.current_device()}")
 else:
     device = "cpu"
     logger.warning("No GPU detected, using CPU for processing")
@@ -51,6 +53,8 @@ if device == "cuda":
     torch.cuda.empty_cache()
     # Set memory fraction to avoid OOM errors
     torch.cuda.set_per_process_memory_fraction(0.8)
+    # Ensure CUDA is initialized
+    torch.cuda.init()
 
 # --- Configuration (same as before) ---
 UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', '/tmp/caption_uploads')
@@ -87,17 +91,64 @@ def load_whisper_model():
     if whisper_model is None:
         try:
             logger.info(f"Loading Whisper model '{whisper_model_size}' on device: {device}")
-            whisper_model = whisper.load_model(whisper_model_size, device=device)
-            logger.info(f"Whisper model loaded successfully on {device}")
+            
+            # Force GPU usage if available
+            if device == "cuda":
+                # Ensure CUDA is available and working
+                if not torch.cuda.is_available():
+                    raise RuntimeError("CUDA is not available")
+                
+                # Set the device explicitly
+                torch.cuda.set_device(0)
+                logger.info(f"Set CUDA device to: {torch.cuda.current_device()}")
+                
+                # Load model with explicit device parameter
+                whisper_model = whisper.load_model(whisper_model_size, device="cuda")
+                
+                # Verify the model is on GPU
+                model_device = next(whisper_model.parameters()).device
+                logger.info(f"Whisper model loaded on device: {model_device}")
+                
+                if model_device.type != 'cuda':
+                    logger.warning(f"Model loaded on {model_device} instead of CUDA")
+                    # Try to move model to GPU
+                    whisper_model = whisper_model.cuda()
+                    logger.info(f"Moved model to GPU: {next(whisper_model.parameters()).device}")
+                
+            else:
+                whisper_model = whisper.load_model(whisper_model_size, device="cpu")
+                logger.info("Whisper model loaded on CPU")
+            
+            # Test GPU memory after loading
+            if device == "cuda":
+                logger.info(f"GPU memory after model loading:")
+                logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+                logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
+
         except Exception as e:
             logger.error(f"Failed to load Whisper model on {device}: {e}")
             # Fallback to CPU if GPU loading fails
             if device == "cuda":
                 logger.info("Attempting to load Whisper model on CPU as fallback")
-                whisper_model = whisper.load_model(whisper_model_size, device="cpu")
+                try:
+                    whisper_model = whisper.load_model(whisper_model_size, device="cpu")
+                    logger.info("Whisper model loaded on CPU as fallback")
+                except Exception as e_cpu:
+                    logger.error(f"Failed to load Whisper model on CPU: {e_cpu}")
+                    raise e_cpu
             else:
                 raise e
     return whisper_model
+
+def ensure_model_on_gpu():
+    """Ensure the Whisper model is on GPU before inference"""
+    global whisper_model
+    if whisper_model is not None and device == "cuda":
+        model_device = next(whisper_model.parameters()).device
+        if model_device.type != 'cuda':
+            logger.info(f"Moving model from {model_device} to GPU")
+            whisper_model = whisper_model.cuda()
+            logger.info(f"Model now on: {next(whisper_model.parameters()).device}")
 
 # --- Helper Functions (same as before) ---
 def allowed_file(filename):
@@ -130,6 +181,7 @@ def format_whisper_timestamp(seconds): # Copied for completeness
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
 # Core processing functions with GPU optimization
+
 def _extract_audio(video_path, audio_path, job_id_log_prefix=""):
     logger.info(f"{job_id_log_prefix} Extracting audio from {video_path} to {audio_path}")
     video = VideoFileClip(video_path)
@@ -143,6 +195,14 @@ def _audio_to_text(wav_path, srt_path, job_id_log_prefix=""):
     try:
         # Load model if not already loaded
         model = load_whisper_model()
+        ensure_model_on_gpu()
+        
+        # Log GPU status before transcription
+        if device == "cuda":
+            logger.info(f"{job_id_log_prefix} GPU memory before transcription:")
+            logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+            logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
+            logger.info(f"  Model device: {next(model.parameters()).device}")
         
         # Transcribe with GPU acceleration
         start_time = time.time()
@@ -167,8 +227,11 @@ def _audio_to_text(wav_path, srt_path, job_id_log_prefix=""):
         
         logger.info(f"{job_id_log_prefix} Transcription complete. SRT saved to {srt_path}")
         
-        # Clear GPU cache after transcription
+        # Log GPU status after transcription and clear cache
         if device == "cuda":
+            logger.info(f"{job_id_log_prefix} GPU memory after transcription:")
+            logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+            logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
             torch.cuda.empty_cache()
             
     except Exception as e:
@@ -357,17 +420,30 @@ def gpu_status():
         'gpu_available': torch.cuda.is_available(),
         'device': device,
         'whisper_model_loaded': whisper_model is not None,
-        'whisper_model_size': whisper_model_size
+        'whisper_model_size': whisper_model_size,
+        'torch_version': torch.__version__,
+        'cuda_version': torch.version.cuda if torch.cuda.is_available() else None
     }
 
-    if device == "cuda":
-        status.update({
-            'gpu_name': gpu_info.name,
-            'gpu_memory_total': gpu_info.total_memory,
-            'gpu_memory_allocated': torch.cuda.memory_allocated(0),
-            'gpu_memory_cached': torch.cuda.memory_reserved(0),
-            'cuda_version': torch.version.cuda
-        })
+    if device == "cuda" and torch.cuda.is_available():
+        try:
+            status.update({
+                'gpu_name': torch.cuda.get_device_properties(0).name,
+                'gpu_memory_total': torch.cuda.get_device_properties(0).total_memory,
+                'gpu_memory_allocated': torch.cuda.memory_allocated(0),
+                'gpu_memory_cached': torch.cuda.memory_reserved(0),
+                'current_device': torch.cuda.current_device(),
+                'device_count': torch.cuda.device_count()
+            })
+            
+            # Check if model is actually on GPU
+            if whisper_model is not None:
+                model_device = next(whisper_model.parameters()).device
+                status['model_device'] = str(model_device)
+                status['model_on_gpu'] = model_device.type == 'cuda'
+            
+        except Exception as e:
+            status['gpu_error'] = str(e)
 
     return jsonify(status), 200
 
@@ -433,6 +509,11 @@ def process_video_directly():
             raise ValueError(f'Video too long (max {MAX_VIDEO_DURATION_SECONDS // 60} minutes).')
 
         logger.info(f"{job_id_log_prefix} Video validated. Duration: {duration_seconds:.2f}s. Starting pipeline on {device}.")
+        
+        # Ensure GPU is ready before processing
+        if device == "cuda":
+            torch.cuda.empty_cache()  # Clear cache before processing
+            ensure_model_on_gpu()
 
         # --- Execute processing pipeline synchronously ---
         _extract_audio(temp_input_filepath, audio_file_path, job_id_log_prefix)
@@ -472,6 +553,10 @@ def process_video_directly():
                     logger.info(f"{job_id_log_prefix} Cleaned up: {f_path}")
                 except OSError as e_clean:
                     logger.warning(f"{job_id_log_prefix} Could not clean up file {f_path}: {e_clean}")
+        
+        # Clear GPU cache after processing
+        if device == "cuda":
+            torch.cuda.empty_cache()
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -479,7 +564,9 @@ def health_check():
         'status': 'ok', 
         'message': 'Video Captioning Service is running.',
         'gpu_available': torch.cuda.is_available(),
-        'device': device
+        'device': device,
+        'model_loaded': whisper_model is not None,
+        'model_device': str(next(whisper_model.parameters()).device) if whisper_model else None
     }), 200
 
 @app.route('/progress', methods=['GET'])
@@ -496,10 +583,23 @@ def stream_progress_sse():
 
 
 if __name__ == '__main__':
+    # Test GPU availability first
+    logger.info("=== GPU Setup Test ===")
+    logger.info(f"PyTorch version: {torch.__version__}")
+    logger.info(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        logger.info(f"CUDA version: {torch.version.cuda}")
+        logger.info(f"GPU count: {torch.cuda.device_count()}")
+        logger.info(f"Current GPU: {torch.cuda.current_device()}")
+        logger.info(f"GPU name: {torch.cuda.get_device_properties(0).name}")
+    
     # Preload Whisper model on startup
     try:
         load_whisper_model()
         logger.info("Whisper model preloaded successfully")
+        if whisper_model and device == "cuda":
+            model_device = next(whisper_model.parameters()).device
+            logger.info(f"Model confirmed on device: {model_device}")
     except Exception as e:
         logger.error(f"Failed to preload Whisper model: {e}")
     
