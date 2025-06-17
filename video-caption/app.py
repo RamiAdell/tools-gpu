@@ -1,3 +1,5 @@
+import multiprocessing as mp
+mp.set_start_method('spawn', force=True)  # Must be first!
 import os
 import uuid
 import json
@@ -595,8 +597,12 @@ if __name__ == '__main__':
     
     # Preload Whisper model on startup
     try:
+        logger.info("Preloading Whisper model...")
         load_whisper_model()
         logger.info("Whisper model preloaded successfully")
+        if whisper_model:
+            test_audio = torch.randn(1, 16000).to(device)  # Fake audio
+            print(next(whisper_model.parameters()).device)  # Should print "cuda:0"
         if whisper_model and device == "cuda":
             model_device = next(whisper_model.parameters()).device
             logger.info(f"Model confirmed on device: {model_device}")
