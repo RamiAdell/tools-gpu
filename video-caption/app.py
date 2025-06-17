@@ -22,7 +22,8 @@ from bidi.algorithm import get_display # type: ignore
 import whisper # type: ignore
 from deep_translator import GoogleTranslator # type: ignore
 from pydub.utils import mediainfo # type: ignore
-
+import multiprocessing as mp
+mp.set_start_method('spawn', force=True)
 # GPU Support
 import torch
 
@@ -358,16 +359,16 @@ def gpu_status():
         'whisper_model_loaded': whisper_model is not None,
         'whisper_model_size': whisper_model_size
     }
-    
-    if torch.cuda.is_available():
+
+    if device == "cuda":
         status.update({
-            'gpu_name': torch.cuda.get_device_name(0),
-            'gpu_memory_total': torch.cuda.get_device_properties(0).total_memory,
+            'gpu_name': gpu_info.name,
+            'gpu_memory_total': gpu_info.total_memory,
             'gpu_memory_allocated': torch.cuda.memory_allocated(0),
             'gpu_memory_cached': torch.cuda.memory_reserved(0),
             'cuda_version': torch.version.cuda
         })
-    
+
     return jsonify(status), 200
 
 @app.route('/process_direct', methods=['POST'])
