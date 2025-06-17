@@ -22,7 +22,8 @@ from bidi.algorithm import get_display # type: ignore
 import whisper # type: ignore
 from deep_translator import GoogleTranslator # type: ignore
 from pydub.utils import mediainfo # type: ignore
-
+from worker import GPUWorker
+worker = GPUWorker()
 # GPU Support
 import torch
 
@@ -554,8 +555,7 @@ def stream_progress_sse():
             time.sleep(5)
     return Response(generate_progress_events(), content_type='text/event-stream')
 
-from worker import GPUWorker
-worker = GPUWorker()
+ 
 @app.route('/test-gpu')
 def test_gpu():
     worker.load_model()
@@ -566,8 +566,7 @@ def test_gpu():
         return f"Error: {str(e)}", 500
 
 if __name__ == '__main__':
-    import multiprocessing as mp
-    mp.set_start_method('spawn', force=True)
+
     # Test GPU availability first
     logger.info("=== GPU Setup Test ===")
     logger.info(f"PyTorch version: {torch.__version__}")

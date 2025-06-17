@@ -72,7 +72,8 @@ ENV FONT_FOLDER=/app/fonts
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV CUDA_VISIBLE_DEVICES=0
-
+ENV NCCL_P2P_DISABLE=1
+ENV TOKENIZERS_PARALLELISM=false
 # Whisper model configuration
 ENV WHISPER_MODEL_SIZE=small
 ENV TORCH_HOME=/app/.cache/torch
@@ -94,7 +95,6 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
 # Reduce worker count for GPU workloads to avoid memory issues
 # Increase timeout for video processing tasks
 # Replace CMD with:
-CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--workers", "1", "--threads", "4", "--preload", "app:app"]
-
+CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--workers", "1", "--threads", "1", "--preload", "app:app"]
 # Alternative: Use Flask development server (not recommended for production)
 # CMD ["python", "app.py"]
