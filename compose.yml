@@ -15,31 +15,31 @@ services:
               capabilities: [gpu]
     runtime: nvidia
     
-  background-removal-app:
-    build:
-      context: ./v-bg-remover
-      dockerfile: Dockerfile
-    ports:
-      - "5550:5550"
-    volumes:
-      - /tmp/uploads:/tmp/uploads
-      - /tmp/processed:/tmp/processed
-    environment:
-      - FLASK_ENV=production
-      - CUDA_VISIBLE_DEVICES=0
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5550/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+  # background-removal-app:
+  #   build:
+  #     context: ./v-bg-remover
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "5550:5550"
+  #   volumes:
+  #     - /tmp/uploads:/tmp/uploads
+  #     - /tmp/processed:/tmp/processed
+  #   environment:
+  #     - FLASK_ENV=production
+  #     - CUDA_VISIBLE_DEVICES=0
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:5550/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
 
   video-caption-gpu-alternative:
     build:

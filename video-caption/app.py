@@ -1,3 +1,5 @@
+import multiprocessing as mp
+mp.set_start_method('spawn', force=True)  # Must be first!
 import os
 import uuid
 import json
@@ -22,8 +24,7 @@ from bidi.algorithm import get_display # type: ignore
 import whisper # type: ignore
 from deep_translator import GoogleTranslator # type: ignore
 from pydub.utils import mediainfo # type: ignore
-from worker import GPUWorker
-worker = GPUWorker()
+
 # GPU Support
 import torch
 
@@ -555,18 +556,14 @@ def stream_progress_sse():
             time.sleep(5)
     return Response(generate_progress_events(), content_type='text/event-stream')
 
- 
 @app.route('/test-gpu')
 def test_gpu():
-    worker.load_model()
-    try:
-        t = torch.randn(1000, 1000).to(worker.device)
-        return f"GPU OK: {t.mean().item()}"
-    except Exception as e:
-        return f"Error: {str(e)}", 500
+    if device == "cuda":
+        t = torch.randn(1000, 1000).cuda()
+        return f"GPU OK: {(t @ t).mean().item()}"
+    return "CPU mode"
 
 if __name__ == '__main__':
-
     # Test GPU availability first
     logger.info("=== GPU Setup Test ===")
     logger.info(f"PyTorch version: {torch.__version__}")
@@ -575,14 +572,11 @@ if __name__ == '__main__':
         logger.info(f"CUDA version: {torch.version.cuda}")
         logger.info(f"GPU count: {torch.cuda.device_count()}")
         logger.info(f"Current GPU: {torch.cuda.current_device()}")
-        logger.info(f"CUDA Devices: {[torch.cuda.get_device_properties(i).name for i in range(torch.cuda.device_count())]}")
-    else:
-        logger.warning("No CUDA devices found. Running on CPU.")
+        logger.info(f"GPU name: {torch.cuda.get_device_properties(0).name}")
     
     # Preload Whisper model on startup
     try:
         logger.info("Preloading Whisper model...")
-        from app import load_whisper_model
         load_whisper_model()
         logger.info("Whisper model preloaded successfully")
         if whisper_model:

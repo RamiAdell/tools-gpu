@@ -78,7 +78,7 @@ ENV TORCH_HOME=/app/.cache/torch
 
 # Create cache directories
 RUN mkdir -p /app/.cache/torch /app/.cache/whisper
-
+RUN pip install onnxruntime-gpu==1.16.3  # Version should match your CUDA 12.1
 # Set proper permissions
 RUN chmod -R 755 /app
 
