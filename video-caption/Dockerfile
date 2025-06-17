@@ -37,7 +37,7 @@ RUN ln -s /usr/bin/python3.10 /usr/bin/python3 && \
 RUN python3 -m pip install --upgrade pip
 
 # Copy the requirements file into the container
-COPY services/video_caption/requirements.txt .
+COPY requirements.txt .
 
 # Install Python dependencies with GPU support
 # Install PyTorch with CUDA support first
@@ -51,7 +51,7 @@ RUN pip install --no-cache-dir moviepy
 RUN pip install --no-cache-dir openai-whisper
 
 # Copy the Flask application code into the container
-COPY services/video_caption /app
+COPY . /app
 
 # --- Font Handling ---
 # Create a directory for fonts if it doesn't exist
