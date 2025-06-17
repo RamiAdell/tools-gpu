@@ -554,12 +554,15 @@ def stream_progress_sse():
             time.sleep(5)
     return Response(generate_progress_events(), content_type='text/event-stream')
 
+from worker import GPUWorker
 @app.route('/test-gpu')
 def test_gpu():
-    if device == "cuda":
-        t = torch.randn(1000, 1000).cuda()
-        return f"GPU OK: {(t @ t).mean().item()}"
-    return "CPU mode"
+    worker.load_model()
+    try:
+        t = torch.randn(1000, 1000).to(worker.device)
+        return f"GPU OK: {t.mean().item()}"
+    except Exception as e:
+        return f"Error: {str(e)}", 500
 
 if __name__ == '__main__':
     import multiprocessing as mp
