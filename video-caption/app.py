@@ -1,5 +1,3 @@
-import multiprocessing as mp
-mp.set_start_method('spawn', force=True)  # Must be first!
 import os
 import uuid
 import json
@@ -564,6 +562,8 @@ def test_gpu():
     return "CPU mode"
 
 if __name__ == '__main__':
+    import multiprocessing as mp
+    mp.set_start_method('spawn', force=True)
     # Test GPU availability first
     logger.info("=== GPU Setup Test ===")
     logger.info(f"PyTorch version: {torch.__version__}")
@@ -577,6 +577,7 @@ if __name__ == '__main__':
     # Preload Whisper model on startup
     try:
         logger.info("Preloading Whisper model...")
+        from app import load_whisper_model
         load_whisper_model()
         logger.info("Whisper model preloaded successfully")
         if whisper_model:

@@ -93,17 +93,8 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
 # Use Gunicorn for production with GPU-optimized settings
 # Reduce worker count for GPU workloads to avoid memory issues
 # Increase timeout for video processing tasks
-CMD ["gunicorn", \
-     "--bind", "0.0.0.0:5003", \
-     "--workers", "2", \
-     "--threads", "1", \
-     "--timeout", "3600", \
-     "--keep-alive", "2", \
-     "--max-requests", "50", \
-     "--max-requests-jitter", "10", \
-     "--preload", \
-     "--worker-class", "sync", \
-     "app:app"]
+# Replace CMD with:
+CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--workers", "1", "--threads", "4", "--preload", "app:app"]
 
 # Alternative: Use Flask development server (not recommended for production)
 # CMD ["python", "app.py"]
