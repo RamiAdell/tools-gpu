@@ -36,5 +36,3 @@ urllib3==2.0.7
 # Logging and monitoring
 psutil==5.9.6
 
-# File handling
-secure-filename==0.1
