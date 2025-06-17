@@ -41,7 +41,7 @@ services:
   #     timeout: 10s
   #     retries: 3
 
-video-caption-gpu-alternative:
+  video-caption-gpu-alternative:
     build:
       context: ./video-caption
       dockerfile: Dockerfile
