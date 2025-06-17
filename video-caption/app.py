@@ -380,7 +380,7 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
 # --- Flask Middleware (API Key Check) ---
 @app.before_request
 def verify_api_key_middleware():
-    if request.path in ['/health', '/gpu-status']: # Allow health check and GPU status without key
+    if request.path in ['/health', '/gpu-status', '/test-gpu']: # Allow health check and GPU status without key
         return
     api_key = request.headers.get('X-Api-Key')
     if api_key != SERVICE_API_KEY:
