@@ -1,3 +1,5 @@
+import multiprocessing as mp
+mp.set_start_method('spawn', force=True)  # Must be first!
 import os
 import uuid
 import json
@@ -49,10 +51,11 @@ else:
 
 # Set memory allocation strategy for GPU
 if device == "cuda":
-    torch.cuda.init()  # Explicit CUDA initialization
-    # Warm-up CUDA (reduces first-run latency)
-    torch.randn(1).cuda()
-    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    # Set memory fraction to avoid OOM errors
+    torch.cuda.set_per_process_memory_fraction(0.8)
+    # Ensure CUDA is initialized
+    torch.cuda.init()
 
 # --- Configuration (same as before) ---
 UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', '/tmp/caption_uploads')
@@ -84,33 +87,58 @@ whisper_model = None
 whisper_model_size = os.getenv('WHISPER_MODEL_SIZE', 'small')  # Can be: tiny, base, small, medium, large
 
 def load_whisper_model():
+    """Load Whisper model with GPU support if available"""
     global whisper_model
     if whisper_model is None:
         try:
-            logger.info(f"Loading Whisper model on {device}")
+            logger.info(f"Loading Whisper model '{whisper_model_size}' on device: {device}")
             
-            # Force CUDA device before loading
+            # Force GPU usage if available
             if device == "cuda":
-                torch.cuda.set_device(0)  # Explicit device selection
+                # Ensure CUDA is available and working
+                if not torch.cuda.is_available():
+                    raise RuntimeError("CUDA is not available")
                 
-                # Load with device_map for better GPU control
-                whisper_model = whisper.load_model(
-                    whisper_model_size,
-                    device="cuda",
-                    download_root="/tmp/whisper"  # Avoid permission issues
-                )
+                # Set the device explicitly
+                torch.cuda.set_device(0)
+                logger.info(f"Set CUDA device to: {torch.cuda.current_device()}")
                 
-                # Verify placement
+                # Load model with explicit device parameter
+                whisper_model = whisper.load_model(whisper_model_size, device="cuda")
+                
+                # Verify the model is on GPU
                 model_device = next(whisper_model.parameters()).device
-                assert model_device.type == 'cuda', "Model not on GPU!"
+                logger.info(f"Whisper model loaded on device: {model_device}")
+                
+                if model_device.type != 'cuda':
+                    logger.warning(f"Model loaded on {model_device} instead of CUDA")
+                    # Try to move model to GPU
+                    whisper_model = whisper_model.cuda()
+                    logger.info(f"Moved model to GPU: {next(whisper_model.parameters()).device}")
                 
             else:
                 whisper_model = whisper.load_model(whisper_model_size, device="cpu")
-                
-        except Exception as e:
-            logger.error(f"Model load failed: {e}")
-            raise RuntimeError(f"Could not load model on {device}") from e
+                logger.info("Whisper model loaded on CPU")
             
+            # Test GPU memory after loading
+            if device == "cuda":
+                logger.info(f"GPU memory after model loading:")
+                logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+                logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
+
+        except Exception as e:
+            logger.error(f"Failed to load Whisper model on {device}: {e}")
+            # Fallback to CPU if GPU loading fails
+            if device == "cuda":
+                logger.info("Attempting to load Whisper model on CPU as fallback")
+                try:
+                    whisper_model = whisper.load_model(whisper_model_size, device="cpu")
+                    logger.info("Whisper model loaded on CPU as fallback")
+                except Exception as e_cpu:
+                    logger.error(f"Failed to load Whisper model on CPU: {e_cpu}")
+                    raise e_cpu
+            else:
+                raise e
     return whisper_model
 
 def ensure_model_on_gpu():
@@ -378,7 +406,7 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
 # --- Flask Middleware (API Key Check) ---
 @app.before_request
 def verify_api_key_middleware():
-    if request.path in ['/health', '/gpu-status', '/test-gpu']: # Allow health check and GPU status without key
+    if request.path in ['/health', '/gpu-status']: # Allow health check and GPU status without key
         return
     api_key = request.headers.get('X-Api-Key')
     if api_key != SERVICE_API_KEY:
@@ -554,16 +582,8 @@ def stream_progress_sse():
             time.sleep(5)
     return Response(generate_progress_events(), content_type='text/event-stream')
 
-@app.route('/test-gpu')
-def test_gpu():
-    if device == "cuda":
-        t = torch.randn(1000, 1000).cuda()
-        return f"GPU OK: {(t @ t).mean().item()}"
-    return "CPU mode"
 
 if __name__ == '__main__':
-    import multiprocessing as mp
-    mp.set_start_method('spawn', force=True)
     # Test GPU availability first
     logger.info("=== GPU Setup Test ===")
     logger.info(f"PyTorch version: {torch.__version__}")
@@ -577,17 +597,11 @@ if __name__ == '__main__':
     # Preload Whisper model on startup
     try:
         logger.info("Preloading Whisper model...")
-        from app import load_whisper_model
         load_whisper_model()
         logger.info("Whisper model preloaded successfully")
         if whisper_model:
             test_audio = torch.randn(1, 16000).to(device)  # Fake audio
             print(next(whisper_model.parameters()).device)  # Should print "cuda:0"
-        if device == "cuda":
-        # Test GPU functionality
-            test_tensor = torch.randn(100, 100).cuda()
-            _ = test_tensor @ test_tensor.T
-            logger.info("GPU computation test passed")
         if whisper_model and device == "cuda":
             model_device = next(whisper_model.parameters()).device
             logger.info(f"Model confirmed on device: {model_device}")
