@@ -30,8 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Create symbolic links for python3.10
-RUN ln -s /usr/bin/python3.10 /usr/bin/python3 && \
-    ln -s /usr/bin/python3.10 /usr/bin/python
+RUN ln -sf /usr/bin/python3.10 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3.10 /usr/bin/python
 
 # Upgrade pip
 RUN python3 -m pip install --upgrade pip
