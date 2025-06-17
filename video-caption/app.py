@@ -554,7 +554,7 @@ def stream_progress_sse():
             time.sleep(5)
     return Response(generate_progress_events(), content_type='text/event-stream')
 
-from .worker import GPUWorker
+from worker import GPUWorker
 worker = GPUWorker()
 @app.route('/test-gpu')
 def test_gpu():
