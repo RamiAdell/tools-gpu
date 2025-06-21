@@ -40,7 +40,21 @@ services:
   #     interval: 30s
   #     timeout: 10s
   #     retries: 3
-
+  text_to_cartoon-gpu:
+    build: ./text-to-cartoon
+    container_name: huggingface_gpu_api_prod
+    ports:
+      - "5006:5006"
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ./static/processed:/app/static/processed
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
   video-caption-gpu-alternative:
     build:
       context: ./video-caption

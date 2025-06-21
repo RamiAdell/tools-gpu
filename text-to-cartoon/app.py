@@ -58,4 +58,4 @@ def generate():
         return jsonify({"error": f"Inference error: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5006, debug=True, threaded=True)
+    app.run(host="0.0.0.0", port=5006, debug=True)
