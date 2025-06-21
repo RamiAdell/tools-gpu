@@ -1,5 +1,3 @@
-
-
 ALLOWED_EXTENSIONS = {'mp4', 'mov', 'webm', 'mkv', 'avi'}
 import shutil
 import time
