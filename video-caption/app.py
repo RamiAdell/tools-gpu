@@ -26,8 +26,7 @@ from pysrt import SubRipFile # type: ignore
 import arabic_reshaper # type: ignore
 from bidi.algorithm import get_display # type: ignore
 import whisper # type: ignore
-from deep_translator import GoogleTranslator # type: ignore
-from pydub.utils import mediainfo # type: ignore
+
 
 # GPU Support - import after multiprocessing setup
 import torch
@@ -213,6 +212,64 @@ def ensure_model_on_gpu():
             logger.error(f"Error ensuring model on GPU: {e}")
 
 # --- Helper Functions ---
+def audio_to_text(wav_path, srt_path, job_id_log_prefix=""):
+    """Transcribe audio with GPU optimization"""
+    logger.info(f"{job_id_log_prefix} Transcribing {wav_path} to {srt_path} using {device}")
+    
+    try:
+        # Load model if not already loaded
+        model = load_whisper_model()
+        ensure_model_on_gpu()
+        
+        # Log GPU status before transcription
+        if device == "cuda" and cuda_available:
+            logger.info(f"{job_id_log_prefix} GPU memory before transcription:")
+            logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+            logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
+            logger.info(f"  Model device: {next(model.parameters()).device}")
+        
+        # Transcribe with GPU acceleration and optimization
+        start_time = time.time()
+        
+        # Optimized transcription parameters for GPU
+        transcribe_options = {
+            'fp16': device == "cuda" and cuda_available,  # Use FP16 on GPU for speed
+            'verbose': False,
+            'language': None,  # Auto-detect language
+            'beam_size': 5 if device == "cuda" else 1,  # Larger beam size on GPU
+            'best_of': 5 if device == "cuda" else 1,  # Multiple candidates on GPU
+            'temperature': 0.0,  # Deterministic output
+        }
+        
+        # Use context manager for memory management
+        with torch.no_grad():
+            result = model.transcribe(wav_path, **transcribe_options)
+        
+        processing_time = time.time() - start_time
+        logger.info(f"{job_id_log_prefix} Transcription completed in {processing_time:.2f}s using {device}")
+        
+        # Write SRT file with better formatting
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            for i, segment in enumerate(result["segments"]):
+                start, end, text = segment['start'], segment['end'], segment['text'].strip()
+                if text:  # Only write non-empty segments
+                    f.write(f"{i+1}\n{format_whisper_timestamp(start)} --> {format_whisper_timestamp(end)}\n{text}\n\n")
+        
+        logger.info(f"{job_id_log_prefix} Transcription complete. SRT saved to {srt_path}")
+        
+        # Clean up GPU memory
+        if device == "cuda" and cuda_available:
+            torch.cuda.empty_cache()
+            logger.info(f"{job_id_log_prefix} GPU memory after cleanup:")
+            logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+            logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
+            
+    except Exception as e:
+        logger.error(f"{job_id_log_prefix} Error during transcription: {str(e)}", exc_info=True)
+        # Clean up on error
+        if device == "cuda" and cuda_available:
+            torch.cuda.empty_cache()
+        raise
 
 def format_whisper_timestamp(seconds):
     assert seconds >= 0, "non-negative timestamp expected"
