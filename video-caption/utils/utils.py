@@ -4,8 +4,6 @@ import time
 from deep_translator import GoogleTranslator # type: ignore
 from pydub.utils import mediainfo # type: ignore
 import logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 import cv2 
 from moviepy.editor import VideoFileClip # type: ignore
 from PIL import Image, ImageDraw, ImageFont # type: ignore
@@ -13,6 +11,12 @@ from pysrt import SubRipFile # type: ignore
 import arabic_reshaper # type: ignore
 from bidi.algorithm import get_display # type: ignore
 import os
+import numpy as np
+import psutil
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 FONT_FOLDER = os.getenv('FONT_FOLDER', '/app/fonts')
 
 font_paths_to_try = [
@@ -23,8 +27,7 @@ font_paths_to_try = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Common Linux font
     "/System/Library/Fonts/Arial.ttf",  # macOS fallback
 ]
-import numpy as np
-import psutil
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
