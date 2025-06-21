@@ -1,67 +1,170 @@
-def _extract_audio(video_path, audio_path, job_id_log_prefix=""):
-    logger.info(f"{job_id_log_prefix} Extracting audio from {video_path} to {audio_path}")
-    video = VideoFileClip(video_path)
-    video.audio.write_audiofile(audio_path, codec='pcm_s16le')
-    video.close()
-    logger.info(f"{job_id_log_prefix} Audio extracted.")
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def _audio_to_text(wav_path, srt_path, job_id_log_prefix=""):
+def get_video_duration(file_path):
+    try:
+        info = mediainfo(file_path)
+        return float(info['duration'])
+    except Exception as e:
+        logger.error(f"Pydub mediainfo error for {file_path}: {e}")
+        try:
+            cap = cv2.VideoCapture(file_path)
+            if not cap.isOpened(): return 0
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = frame_count / fps if fps > 0 else 0
+            cap.release()
+            return duration
+        except Exception as e_cv2:
+            logger.error(f"OpenCV duration error for {file_path}: {e_cv2}")
+            return 0
+
+def extract_audio(video_path, audio_path, job_id_log_prefix=""):
+    """Extract audio with optimized settings"""
+    logger.info(f"{job_id_log_prefix} Extracting audio from {video_path} to {audio_path}")
+    
+    try:
+        video = VideoFileClip(video_path)
+        # Use higher quality audio settings for better transcription
+        video.audio.write_audiofile(
+            audio_path, 
+            codec='pcm_s16le',
+            ffmpeg_params=["-ar", "16000"]  # Whisper's preferred sample rate
+        )
+        video.close()
+        logger.info(f"{job_id_log_prefix} Audio extracted successfully")
+    except Exception as e:
+        logger.error(f"{job_id_log_prefix} Audio extraction failed: {e}")
+        raise
+
+def audio_to_text(wav_path, srt_path, job_id_log_prefix=""):
+    """Transcribe audio with GPU optimization"""
     logger.info(f"{job_id_log_prefix} Transcribing {wav_path} to {srt_path} using {device}")
     
     try:
         # Load model if not already loaded
         model = load_whisper_model()
+        ensure_model_on_gpu()
         
-        # Transcribe with GPU acceleration
+        # Log GPU status before transcription
+        if device == "cuda" and cuda_available:
+            logger.info(f"{job_id_log_prefix} GPU memory before transcription:")
+            logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+            logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
+            logger.info(f"  Model device: {next(model.parameters()).device}")
+        
+        # Transcribe with GPU acceleration and optimization
         start_time = time.time()
         
-        # Set FP16 based on device - GPU can use FP16 for faster processing
-        use_fp16 = device == "cuda"
+        # Optimized transcription parameters for GPU
+        transcribe_options = {
+            'fp16': device == "cuda" and cuda_available,  # Use FP16 on GPU for speed
+            'verbose': False,
+            'language': None,  # Auto-detect language
+            'beam_size': 5 if device == "cuda" else 1,  # Larger beam size on GPU
+            'best_of': 5 if device == "cuda" else 1,  # Multiple candidates on GPU
+            'temperature': 0.0,  # Deterministic output
+        }
         
-        result = model.transcribe(
-            wav_path, 
-            fp16=use_fp16,
-            verbose=False  # Reduce logging noise
-        )
+        # Use context manager for memory management
+        with torch.no_grad():
+            result = model.transcribe(wav_path, **transcribe_options)
         
         processing_time = time.time() - start_time
         logger.info(f"{job_id_log_prefix} Transcription completed in {processing_time:.2f}s using {device}")
         
-        # Write SRT file
+        # Write SRT file with better formatting
         with open(srt_path, 'w', encoding='utf-8') as f:
             for i, segment in enumerate(result["segments"]):
                 start, end, text = segment['start'], segment['end'], segment['text'].strip()
-                f.write(f"{i+1}\n{format_whisper_timestamp(start)} --> {format_whisper_timestamp(end)}\n{text}\n\n")
+                if text:  # Only write non-empty segments
+                    f.write(f"{i+1}\n{format_whisper_timestamp(start)} --> {format_whisper_timestamp(end)}\n{text}\n\n")
         
         logger.info(f"{job_id_log_prefix} Transcription complete. SRT saved to {srt_path}")
         
-        # Clear GPU cache after transcription
-        if device == "cuda":
+        # Clean up GPU memory
+        if device == "cuda" and cuda_available:
             torch.cuda.empty_cache()
+            logger.info(f"{job_id_log_prefix} GPU memory after cleanup:")
+            logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+            logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
             
     except Exception as e:
         logger.error(f"{job_id_log_prefix} Error during transcription: {str(e)}", exc_info=True)
+        # Clean up on error
+        if device == "cuda" and cuda_available:
+            torch.cuda.empty_cache()
         raise
 
-def _translate_srt(original_srt_path, target_lang, translated_srt_path, job_id_log_prefix=""):
+def translate_srt(original_srt_path, target_lang, translated_srt_path, job_id_log_prefix=""):
+    """Translate SRT with error handling and batching"""
     if target_lang.lower() in ['en', 'english']:
         logger.info(f"{job_id_log_prefix} Target is English, skipping translation.")
         shutil.copyfile(original_srt_path, translated_srt_path)
         return
+        
     logger.info(f"{job_id_log_prefix} Translating {original_srt_path} to {target_lang}")
-    subs = SubRipFile.open(original_srt_path, encoding='utf-8')
-    translator = GoogleTranslator(source='auto', target=target_lang)
-    for sub in subs:
-        try:
-            translated = translator.translate(sub.text)
-            sub.text = translated if translated else sub.text
-        except Exception as e_trans:
-            logger.warning(f"{job_id_log_prefix} Translation failed for '{sub.text[:30]}...': {e_trans}")
-    subs.save(translated_srt_path, encoding='utf-8')
-    logger.info(f"{job_id_log_prefix} Translation complete.")
     
-def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_log_prefix=""):
-    """Add captions to video with enhanced error handling and text rendering."""
+    try:
+        subs = SubRipFile.open(original_srt_path, encoding='utf-8')
+        translator = GoogleTranslator(source='auto', target=target_lang)
+        
+        # Batch translation for efficiency
+        texts_to_translate = []
+        for sub in subs:
+            if sub.text.strip():
+                texts_to_translate.append(sub.text)
+        
+        if texts_to_translate:
+            try:
+                # Translate in batches to avoid rate limits
+                batch_size = 10
+                translated_texts = []
+                
+                for i in range(0, len(texts_to_translate), batch_size):
+                    batch = texts_to_translate[i:i+batch_size]
+                    batch_results = []
+                    
+                    for text in batch:
+                        try:
+                            translated = translator.translate(text)
+                            batch_results.append(translated if translated else text)
+                            time.sleep(0.1)  # Small delay to avoid rate limits
+                        except Exception as e_trans:
+                            logger.warning(f"{job_id_log_prefix} Translation failed for '{text[:30]}...': {e_trans}")
+                            batch_results.append(text)
+                    
+                    translated_texts.extend(batch_results)
+                
+                # Apply translations back to subtitles
+                text_idx = 0
+                for sub in subs:
+                    if sub.text.strip():
+                        if text_idx < len(translated_texts):
+                            sub.text = translated_texts[text_idx]
+                            text_idx += 1
+                
+            except Exception as e:
+                logger.error(f"{job_id_log_prefix} Batch translation failed: {e}")
+                # Fallback to individual translation
+                for sub in subs:
+                    try:
+                        if sub.text.strip():
+                            translated = translator.translate(sub.text)
+                            sub.text = translated if translated else sub.text
+                    except Exception as e_trans:
+                        logger.warning(f"{job_id_log_prefix} Individual translation failed for '{sub.text[:30]}...': {e_trans}")
+        
+        subs.save(translated_srt_path, encoding='utf-8')
+        logger.info(f"{job_id_log_prefix} Translation complete.")
+        
+    except Exception as e:
+        logger.error(f"{job_id_log_prefix} Translation error: {e}")
+        # Copy original file as fallback
+        shutil.copyfile(original_srt_path, translated_srt_path)
+    
+def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_log_prefix=""):
+    """Add captions to video with enhanced GPU-optimized processing"""
     try:
         logger.info(f"{job_id_log_prefix} Adding captions from {srt_path} to {video_path}")
         
@@ -75,19 +178,11 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
         
         # Process font options with robust fallback
         font_name = font_opts.get('family', 'Arial.ttf')
-        font_size = font_opts.get('size', 24)
+        font_size = max(font_opts.get('size', 32), 16)  # Increased default size
         font_color = font_opts.get('color', '#FFFFFF')
         
         # Font loading with multiple fallbacks
         font = None
-        font_paths_to_try = [
-            os.path.join(FONT_FOLDER, font_name),
-            font_name,  # Try system font
-            os.path.join(FONT_FOLDER, "Arial.ttf"),
-            "arial.ttf",  # Common system fallback
-            os.path.join(FONT_FOLDER, "LiberationSans-Regular.ttf")
-        ]
-        
         for fp in font_paths_to_try:
             try:
                 font = ImageFont.truetype(fp, font_size)
@@ -97,10 +192,14 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
                 continue
                 
         if font is None:
-            raise RuntimeError(f"Could not load any fallback font from: {font_paths_to_try}")
+            logger.warning(f"{job_id_log_prefix} No TrueType font found, using default")
+            try:
+                font = ImageFont.load_default()
+            except:
+                raise RuntimeError("Could not load any font")
 
         def text_overlay_func(get_frame, t):
-            """Process each frame to add captions."""
+            """Process each frame to add captions with GPU optimization"""
             try:
                 frame_array = get_frame(t)
                 img = Image.fromarray(frame_array)
@@ -112,26 +211,34 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
                     start = sub.start.ordinal / 1000.0
                     end = sub.end.ordinal / 1000.0
                     if start <= t <= end:
-                        text = sub.text
-                        # Handle RTL languages like Arabic
-                        if any('\u0600' <= char <= '\u06FF' for char in text):
-                            text = get_display(arabic_reshaper.reshape(text))
-                        active_texts.append(text)
+                        text = sub.text.strip()
+                        if text:
+                            # Handle RTL languages like Arabic
+                            if any('\u0600' <= char <= '\u06FF' for char in text):
+                                text = get_display(arabic_reshaper.reshape(text))
+                            active_texts.append(text)
                 
                 if not active_texts:
                     return np.array(img)
                 
                 full_caption = " ".join(active_texts)
                 
-                # Improved text wrapping
-                max_width = img.width * 0.9
+                # Improved text wrapping with better word breaking
+                max_width = int(img.width * 0.9)
                 lines = []
                 words = full_caption.split()
                 current_line = ""
                 
                 for word in words:
                     test_line = f"{current_line} {word}" if current_line else word
-                    text_width = draw.textlength(test_line, font=font)
+                    
+                    try:
+                        # Use textbbox for better text measurement
+                        bbox = draw.textbbox((0, 0), test_line, font=font)
+                        text_width = bbox[2] - bbox[0]
+                    except AttributeError:
+                        # Fallback for older PIL versions
+                        text_width = draw.textsize(test_line, font=font)[0]
                     
                     if text_width <= max_width:
                         current_line = test_line
@@ -143,29 +250,47 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
                 if current_line:
                     lines.append(current_line)
                 
-                # Calculate text position
-                line_height = font.getbbox("A")[3] - font.getbbox("A")[1] + 5
+                # Calculate text position with better spacing
+                try:
+                    bbox = draw.textbbox((0, 0), "A", font=font)
+                    line_height = (bbox[3] - bbox[1]) + 8  # Add padding
+                except AttributeError:
+                    line_height = draw.textsize("A", font=font)[1] + 8
+                
                 total_text_height = len(lines) * line_height
-                margin = img.height * 0.05
+                margin = max(int(img.height * 0.08), 20)  # Adaptive margin
                 base_y = img.height - total_text_height - margin
                 
-                # Draw each line with stroke/border
-                stroke_width = 2
-                stroke_color = (0, 0, 0)  # Black stroke
-                text_color = tuple(int(font_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))  # Hex to RGB
+                # Enhanced text rendering with better outline
+                stroke_width = max(2, font_size // 12)
+                stroke_color = (0, 0, 0, 255)  # Black with alpha
                 
+                # Parse color
+                if font_color.startswith('#'):
+                    color_hex = font_color.lstrip('#')
+                    text_color = tuple(int(color_hex[i:i+2], 16) for i in (0, 2, 4))
+                else:
+                    text_color = (255, 255, 255)  # Default white
+                
+                # Draw each line with enhanced stroke/border
                 for i, line in enumerate(lines):
                     if not line:
                         continue
-                        
-                    text_width = draw.textlength(line, font=font)
-                    x = (img.width - text_width) / 2
+                    
+                    try:
+                        bbox = draw.textbbox((0, 0), line, font=font)
+                        text_width = bbox[2] - bbox[0]
+                    except AttributeError:
+                        text_width = draw.textsize(line, font=font)[0]
+                    
+                    x = (img.width - text_width) // 2
                     y = base_y + (i * line_height)
                     
-                    # Draw stroke (outline)
-                    for dx in [-stroke_width, stroke_width]:
-                        for dy in [-stroke_width, stroke_width]:
-                            draw.text((x + dx, y + dy), line, font=font, fill=stroke_color)
+                    # Draw stroke (outline) with multiple passes for smoother outline
+                    for dx in range(-stroke_width, stroke_width + 1):
+                        for dy in range(-stroke_width, stroke_width + 1):
+                            if dx != 0 or dy != 0:
+                                draw.text((x + dx, y + dy), line, font=font, fill=stroke_color)
                     
                     # Draw main text
                     draw.text((x, y), line, font=font, fill=text_color)
@@ -174,24 +299,31 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
             
             except Exception as e:
                 logger.error(f"{job_id_log_prefix} Error processing frame at {t}s: {str(e)}")
-                return get_frame(t)  # Return original frame on error
+                return get_frame(t)
         
-        # Process video with progress tracking
+        # Process video with optimized settings for GPU deployment
         logger.info(f"{job_id_log_prefix} Starting video processing...")
         captioned_clip = video.fl(text_overlay_func, apply_to=['video'])
         
-        # Write output with optimized settings
+        # Write output with GPU-optimized settings
         output_dir = os.path.dirname(output_path)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir)
-            
+        
+        # Use more threads for faster processing on 28-core system
+        thread_count = min(psutil.cpu_count(), 16)  # Don't use all cores
+        
         captioned_clip.write_videofile(
             output_path,
             codec="libx264",
             audio_codec="aac",
-            threads=4,
-            preset='medium',
-            ffmpeg_params=["-crf", "23"],
+            threads=thread_count,
+            preset='fast',  # Faster preset for GPU deployment
+            ffmpeg_params=[
+                "-crf", "20",  # Higher quality
+                "-movflags", "+faststart",  # Web optimization
+                "-pix_fmt", "yuv420p"  # Compatibility
+            ],
             logger='bar' if logger.level <= logging.INFO else None
         )
         
@@ -206,3 +338,4 @@ def _add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_
             video.close()
         if 'captioned_clip' in locals():
             captioned_clip.close()
+
