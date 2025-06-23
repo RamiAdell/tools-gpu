@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""
-Test script to check video codec support in OpenCV
-"""
 import cv2
 import numpy as np
 import tempfile
 import os
 
 def test_video_codecs():
-    """Test various video codecs to see which ones work"""
     
     print("Testing video codec support...")
     print(f"OpenCV version: {cv2.__version__}")
@@ -18,7 +14,6 @@ def test_video_codecs():
     fps = 30
     frames_to_write = 5
     
-    # Codecs to test
     codecs_to_test = [
         ('mp4v', 'MP4V', '.mp4'),
         ('XVID', 'XVID', '.avi'),
@@ -35,22 +30,18 @@ def test_video_codecs():
     
     for codec_name, fourcc_str, extension in codecs_to_test:
         try:
-            # Create temporary file
             with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp_file:
                 temp_path = tmp_file.name
             
             print(f"\nTesting codec: {codec_name} ({fourcc_str})")
             
-            # Try to create video writer
             fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
             out = cv2.VideoWriter(temp_path, fourcc, fps, (width, height), True)
             
             if out.isOpened():
                 print(f"✓ Codec {codec_name} initialized successfully")
                 
-                # Try to write some frames
                 for i in range(frames_to_write):
-                    # Create a test frame (colorful gradient)
                     frame = np.zeros((height, width, 3), dtype=np.uint8)
                     frame[:, :, 0] = (i * 50) % 256  # Blue channel
                     frame[:, :, 1] = (i * 100) % 256  # Green channel
