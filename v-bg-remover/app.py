@@ -18,7 +18,7 @@ import numpy as np
 app = Flask(__name__)
 CORS(app)
 
-# Enhanced logging configuration
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -29,20 +29,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuration
+
 UPLOAD_FOLDER = '/tmp/uploads'
 PROCESSED_FOLDER = '/tmp/processed'
 ALLOWED_EXTENSIONS = {'mp4', 'mov', 'webm'}
 API_KEY = "GPukTcc2FXcAo32U6j6y5rOK8LJW5QAf"
 
-# Make sure directories exist
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(PROCESSED_FOLDER, exist_ok=True)
 
-# Progress tracking
 progress_data = {}
 
-# GPU setup and logging
 def setup_gpu():
     """Setup GPU and log system information"""
     logger.info("=== System Information ===")
@@ -60,7 +58,7 @@ def setup_gpu():
     else:
         logger.warning("CUDA not available - running on CPU")
     
-    # Check ONNX Runtime providers
+
     try:
         import onnxruntime as ort
         providers = ort.get_available_providers()
@@ -74,13 +72,13 @@ def setup_gpu():
     
     logger.info("=== End System Information ===")
 
-# Initialize GPU setup
+
 setup_gpu()
 
-# Initialize rembg session with GPU support
+
 try:
     logger.info("Initializing rembg session with GPU support...")
-    # Create session with explicit GPU provider
+
     rembg_session = new_session('u2net', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
     logger.info("rembg session initialized successfully with GPU support")
 except Exception as e:
@@ -113,7 +111,7 @@ def remove_background_from_video(input_video_path, output_video_path, progress_c
     
     logger.info(f"Video properties: {width}x{height}, {fps} fps, {frame_count} frames")
     
-    # Use H.264 codec for better compatibility
+
     fourcc = cv2.VideoWriter_fourcc(*'H264')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height), True)
     
@@ -132,27 +130,21 @@ def remove_background_from_video(input_video_path, output_video_path, progress_c
                 break
             
             try:
-                # Convert BGR to RGB for rembg processing
+                
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 
-                # Remove background using rembg with GPU session
                 output_rgba = remove(frame_rgb, session=rembg_session)
                 
-                # Convert RGBA to BGR for video output (replacing alpha with white background)
-                if output_rgba.shape[2] == 4:  # RGBA
-                    # Create white background
+                if output_rgba.shape[2] == 4:  
                     background = np.ones((height, width, 3), dtype=np.uint8) * 255
                     
-                    # Extract alpha channel
                     alpha = output_rgba[:, :, 3:4] / 255.0
                     
-                    # Blend with background
                     output_rgb = output_rgba[:, :, :3] * alpha + background * (1 - alpha)
                     output_bgr = cv2.cvtColor(output_rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
                 else:
                     output_bgr = cv2.cvtColor(output_rgba, cv2.COLOR_RGB2BGR)
                 
-                # Write frame to output video
                 success = out.write(output_bgr)
                 if not success:
                     logger.error(f"Failed to write frame {processed_frames}")
@@ -160,7 +152,6 @@ def remove_background_from_video(input_video_path, output_video_path, progress_c
                 processed_frames += 1
                 progress_percentage = (processed_frames / frame_count) * 100
                 
-                # Log progress every 10 frames
                 if processed_frames % 10 == 0:
                     elapsed_time = time.time() - start_time
                     fps_current = processed_frames / elapsed_time if elapsed_time > 0 else 0
@@ -170,7 +161,6 @@ def remove_background_from_video(input_video_path, output_video_path, progress_c
                 
             except Exception as frame_error:
                 logger.error(f"Error processing frame {processed_frames}: {frame_error}")
-                # Write original frame if processing fails
                 out.write(frame)
                 processed_frames += 1
                 progress_percentage = (processed_frames / frame_count) * 100
@@ -187,11 +177,9 @@ def remove_background_from_video(input_video_path, output_video_path, progress_c
 
 @app.before_request
 def verify_api_key():
-    # Skip API key check for progress endpoint which is used for SSE
     if request.path == '/progress':
         return
         
-    # Check API key in headers
     api_key = request.headers.get('X-Api-Key')
     if api_key != API_KEY:
         logger.warning(f"Unauthorized access attempt from {request.remote_addr}")
@@ -220,17 +208,14 @@ def upload_file():
         return jsonify({'success': False, 'error': 'File type not allowed'}), 400
     
     try:
-        # Create a unique filename
         unique_id = uuid.uuid4().hex
         filename = f"{user_id}_{unique_id}_{secure_filename(file.filename)}"
         file_path = os.path.join(UPLOAD_FOLDER, filename)
         
         logger.info(f"Saving file to: {file_path}")
         
-        # Save the file
         file.save(file_path)
         
-        # Check file size
         file_size = os.path.getsize(file_path)
         logger.info(f"File size: {file_size / (1024*1024):.2f} MB")
         
@@ -258,7 +243,6 @@ def upload_file():
             logger.error("Video too long")
             return jsonify({'success': False, 'error': 'Video too long (max 5 minutes)'}), 400
         
-        # Initialize progress tracking for this file
         progress_data[filename] = {
             'status': 'uploaded',
             'progress': 0,
@@ -289,14 +273,12 @@ def process_video_background(filename, user_id):
         
         logger.info(f"Processing: {input_path} -> {output_path}")
         
-        # Update progress
         progress_data[filename] = {
             'status': 'processing',
             'progress': 5,
             'message': 'Starting background removal'
         }
         
-        # Define progress callback function
         def update_progress(progress_percentage):
             progress_data[filename] = {
                 'status': 'processing',
@@ -358,7 +340,6 @@ def process_video():
             logger.error(f"File not found: {file_path}")
             return jsonify({'error': 'File not found'}), 404
             
-        # Start processing in background thread
         processing_thread = threading.Thread(
             target=process_video_background,
             args=(filename, user_id)
@@ -366,7 +347,6 @@ def process_video():
         processing_thread.start()
         logger.info(f"Started processing thread for {filename}")
         
-        # Poll for completion
         max_wait = 600  # 10 minutes max wait
         wait_time = 0
         sleep_interval = 1
@@ -409,10 +389,8 @@ def progress_stream():
         last_data = {}
         
         while True:
-            # Copy to avoid modification during iteration
             current_data = progress_data.copy()
             
-            # Only send if there's new data
             if current_data != last_data:
                 data_str = json.dumps(current_data)
                 yield f"data: {data_str}\n\n"
