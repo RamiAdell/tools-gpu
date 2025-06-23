@@ -55,7 +55,6 @@ def extract_audio(video_path, audio_path, job_id_log_prefix=""):
     
     try:
         video = VideoFileClip(video_path)
-        # Use higher quality audio settings for better transcription
         video.audio.write_audiofile(
             audio_path, 
             codec='pcm_s16le',
@@ -81,7 +80,6 @@ def translate_srt(original_srt_path, target_lang, translated_srt_path, job_id_lo
         subs = SubRipFile.open(original_srt_path, encoding='utf-8')
         translator = GoogleTranslator(source='auto', target=target_lang)
         
-        # Batch translation for efficiency
         texts_to_translate = []
         for sub in subs:
             if sub.text.strip():
@@ -89,7 +87,6 @@ def translate_srt(original_srt_path, target_lang, translated_srt_path, job_id_lo
         
         if texts_to_translate:
             try:
-                # Translate in batches to avoid rate limits
                 batch_size = 10
                 translated_texts = []
                 
@@ -108,7 +105,6 @@ def translate_srt(original_srt_path, target_lang, translated_srt_path, job_id_lo
                     
                     translated_texts.extend(batch_results)
                 
-                # Apply translations back to subtitles
                 text_idx = 0
                 for sub in subs:
                     if sub.text.strip():
@@ -118,7 +114,6 @@ def translate_srt(original_srt_path, target_lang, translated_srt_path, job_id_lo
                 
             except Exception as e:
                 logger.error(f"{job_id_log_prefix} Batch translation failed: {e}")
-                # Fallback to individual translation
                 for sub in subs:
                     try:
                         if sub.text.strip():
@@ -132,7 +127,6 @@ def translate_srt(original_srt_path, target_lang, translated_srt_path, job_id_lo
         
     except Exception as e:
         logger.error(f"{job_id_log_prefix} Translation error: {e}")
-        # Copy original file as fallback
         shutil.copyfile(original_srt_path, translated_srt_path)
     
 def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_log_prefix=""):
@@ -140,15 +134,12 @@ def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_l
     try:
         logger.info(f"{job_id_log_prefix} Adding captions from {srt_path} to {video_path}")
         
-        # Validate input files
         if not all(os.path.exists(f) for f in [video_path, srt_path]):
             raise FileNotFoundError("Input video or SRT file not found")
         
-        # Load video and subtitles
         video = VideoFileClip(video_path)
         subs = SubRipFile.open(srt_path, encoding='utf-8')
         
-        # Process font options with robust fallback
         font_name = font_opts.get('family', 'Arial.ttf')
         font_size = max(font_opts.get('size', 32), 16)  # Increased default size
         font_color = font_opts.get('color', '#FFFFFF')
@@ -177,7 +168,6 @@ def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_l
                 img = Image.fromarray(frame_array)
                 draw = ImageDraw.Draw(img)
                 
-                # Get active subtitles for current time
                 active_texts = []
                 for sub in subs:
                     start = sub.start.ordinal / 1000.0
@@ -185,7 +175,6 @@ def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_l
                     if start <= t <= end:
                         text = sub.text.strip()
                         if text:
-                            # Handle RTL languages like Arabic
                             if any('\u0600' <= char <= '\u06FF' for char in text):
                                 text = get_display(arabic_reshaper.reshape(text))
                             active_texts.append(text)
@@ -195,7 +184,6 @@ def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_l
                 
                 full_caption = " ".join(active_texts)
                 
-                # Improved text wrapping with better word breaking
                 max_width = int(img.width * 0.9)
                 lines = []
                 words = full_caption.split()
@@ -205,11 +193,9 @@ def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_l
                     test_line = f"{current_line} {word}" if current_line else word
                     
                     try:
-                        # Use textbbox for better text measurement
                         bbox = draw.textbbox((0, 0), test_line, font=font)
                         text_width = bbox[2] - bbox[0]
                     except AttributeError:
-                        # Fallback for older PIL versions
                         text_width = draw.textsize(test_line, font=font)[0]
                     
                     if text_width <= max_width:
@@ -222,7 +208,6 @@ def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_l
                 if current_line:
                     lines.append(current_line)
                 
-                # Calculate text position with better spacing
                 try:
                     bbox = draw.textbbox((0, 0), "A", font=font)
                     line_height = (bbox[3] - bbox[1]) + 8  # Add padding
@@ -233,7 +218,6 @@ def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_l
                 margin = max(int(img.height * 0.08), 20)  # Adaptive margin
                 base_y = img.height - total_text_height - margin
                 
-                # Enhanced text rendering with better outline
                 stroke_width = max(2, font_size // 12)
                 stroke_color = (0, 0, 0, 255)  # Black with alpha
                 
@@ -244,7 +228,6 @@ def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_l
                 else:
                     text_color = (255, 255, 255)  # Default white
                 
-                # Draw each line with enhanced stroke/border
                 for i, line in enumerate(lines):
                     if not line:
                         continue
@@ -258,13 +241,11 @@ def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_l
                     x = (img.width - text_width) // 2
                     y = base_y + (i * line_height)
                     
-                    # Draw stroke (outline) with multiple passes for smoother outline
                     for dx in range(-stroke_width, stroke_width + 1):
                         for dy in range(-stroke_width, stroke_width + 1):
                             if dx != 0 or dy != 0:
                                 draw.text((x + dx, y + dy), line, font=font, fill=stroke_color)
                     
-                    # Draw main text
                     draw.text((x, y), line, font=font, fill=text_color)
                 
                 return np.array(img)
@@ -273,16 +254,13 @@ def add_captions_to_video(video_path, srt_path, output_path, font_opts, job_id_l
                 logger.error(f"{job_id_log_prefix} Error processing frame at {t}s: {str(e)}")
                 return get_frame(t)
         
-        # Process video with optimized settings for GPU deployment
         logger.info(f"{job_id_log_prefix} Starting video processing...")
         captioned_clip = video.fl(text_overlay_func, apply_to=['video'])
         
-        # Write output with GPU-optimized settings
         output_dir = os.path.dirname(output_path)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir)
         
-        # Use more threads for faster processing on 28-core system
         thread_count = min(psutil.cpu_count(), 16)  # Don't use all cores
         
         captioned_clip.write_videofile(

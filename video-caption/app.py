@@ -1,5 +1,5 @@
 import multiprocessing 
-# MUST be before any CUDA imports
+
  
 if __name__ == '__main__':
     multiprocessing.set_start_method('spawn', force=True)
@@ -15,57 +15,57 @@ import psutil
 from concurrent.futures import ThreadPoolExecutor
 from utils.utils import allowed_file, get_video_duration, extract_audio, audio_to_text, translate_srt, add_captions_to_video
 from flask import Flask, request, jsonify, Response, send_file, make_response
-from flask_cors import CORS # type: ignore
+from flask_cors import CORS 
 import numpy as np
 from werkzeug.utils import secure_filename
 
-# Video/Audio Processing (ensure all imports from previous version are here)
-import cv2 
-from moviepy.editor import VideoFileClip # type: ignore
-from PIL import Image, ImageDraw, ImageFont # type: ignore
-from pysrt import SubRipFile # type: ignore
-import arabic_reshaper # type: ignore
-from bidi.algorithm import get_display # type: ignore
-import whisper # type: ignore
 
-# GPU Support - import after multiprocessing setup
+import cv2 
+from moviepy.editor import VideoFileClip 
+from PIL import Image, ImageDraw, ImageFont 
+from pysrt import SubRipFile 
+import arabic_reshaper 
+from bidi.algorithm import get_display 
+import whisper 
+
+
 import torch
 import torch.backends.cudnn as cudnn
 
-# PERFORMANCE OPTIMIZATIONS FOR HIGH-SPEC VM
-# Optimize environment variables for GPU performance
-os.environ['OMP_NUM_THREADS'] = '14'  # Half of your 28 CPUs for balanced performance
+
+
+os.environ['OMP_NUM_THREADS'] = '14'  
 os.environ['MKL_NUM_THREADS'] = '14'
 os.environ['NUMEXPR_NUM_THREADS'] = '14'
-os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Allow async GPU operations
+os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  
 os.environ['CUDA_CACHE_DISABLE'] = '0'
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:1024,garbage_collection_threshold:0.8'  # Larger split for your 58GB RAM
-os.environ['TORCH_CUDNN_V8_API_ENABLED'] = '1'  # Enable cuDNN v8 optimizations
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:1024,garbage_collection_threshold:0.8'  
+os.environ['TORCH_CUDNN_V8_API_ENABLED'] = '1'  
 os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
-# Memory optimization for large RAM
+
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] += ',expandable_segments:True'
 
-# --- Flask App Setup ---
+
 app = Flask(__name__)
 CORS(app)
 
-# Configure Flask for high-performance
-app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2GB max file size
-app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 300  # Cache control
 
-# --- Logging Configuration ---
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 300  
+
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Enhanced GPU Configuration ---
-device = "cpu"  # Default fallback
+
+device = "cpu"  
 gpu_info = None
 cuda_available = False
-gpu_memory_fraction = 0.90  # Use 90% of GPU memory for better performance on dedicated VM
+gpu_memory_fraction = 0.90  
 
-# Thread pool for parallel processing
+
 executor = ThreadPoolExecutor(max_workers=4)
 
 def initialize_cuda():
@@ -75,13 +75,13 @@ def initialize_cuda():
     try:
         cuda_available = torch.cuda.is_available()
         if cuda_available:
-            # Test CUDA initialization
+            
             torch.cuda.init()
             
-            # Enable advanced optimizations
-            cudnn.benchmark = True  # Optimize for consistent input sizes
-            cudnn.deterministic = False  # Allow non-deterministic for speed
-            cudnn.allow_tf32 = True  # Enable TF32 for faster training/inference
+            
+            cudnn.benchmark = True  
+            cudnn.deterministic = False  
+            cudnn.allow_tf32 = True  
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
             
@@ -95,25 +95,25 @@ def initialize_cuda():
             logger.info(f"Current CUDA device: {torch.cuda.current_device()}")
             logger.info(f"GPU multiprocessors: {gpu_info.multi_processor_count}")
             
-            # Aggressive memory allocation for dedicated VM
+            
             torch.cuda.empty_cache()
             torch.cuda.set_per_process_memory_fraction(gpu_memory_fraction)
             
-            # Pre-allocate memory pool for faster allocations
+            
             torch.cuda.empty_cache()
             
-            # Warm up GPU with larger test operation for high-spec VM
+            
             logger.info("Warming up GPU with intensive operation...")
             test_tensor = torch.randn(2000, 2000, device='cuda')
-            for _ in range(3):  # Multiple warmup iterations
+            for _ in range(3):  
                 _ = torch.mm(test_tensor, test_tensor.t())
             del test_tensor
             torch.cuda.empty_cache()
             
-            # Set GPU frequency scaling for maximum performance
+            
             try:
-                os.system("nvidia-smi -pl 400")  # Set power limit to maximum
-                os.system("nvidia-smi -ac 877,1215")  # Set memory and graphics clocks to maximum
+                os.system("nvidia-smi -pl 400")  
+                os.system("nvidia-smi -ac 877,1215")  
             except:
                 logger.info("Could not set GPU performance mode (non-critical)")
             
@@ -129,19 +129,19 @@ def initialize_cuda():
         device = "cpu"
         cuda_available = False
 
-# Initialize CUDA outside of request context
+
 initialize_cuda()
 
-# --- Configuration (optimized for high-performance VM) ---
+
 UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', '/tmp/caption_uploads')
 PROCESSED_FOLDER = os.getenv('PROCESSED_FOLDER', '/tmp/caption_processed')
 FONT_FOLDER = os.getenv('FONT_FOLDER', '/app/fonts')
 ALLOWED_EXTENSIONS = {'mp4', 'mov', 'webm', 'mkv', 'avi', 'flv', 'm4v'}
 SERVICE_API_KEY = os.getenv('CAPTION_SERVICE_API_KEY', "YourSecretApiKeyForCaptionService123")
-MAX_FILE_SIZE_MB = int(os.getenv('MAX_FILE_SIZE_MB', '2048')) * 1024 * 1024  # 2GB for high-spec VM
-MAX_VIDEO_DURATION_SECONDS = int(os.getenv('MAX_VIDEO_DURATION_SECONDS', '1800'))  # 30 minutes for high-spec VM
+MAX_FILE_SIZE_MB = int(os.getenv('MAX_FILE_SIZE_MB', '2048')) * 1024 * 1024  
+MAX_VIDEO_DURATION_SECONDS = int(os.getenv('MAX_VIDEO_DURATION_SECONDS', '1800'))  
 
-# Use ramdisk for temporary files on high-RAM system
+
 RAMDISK_PATH = '/dev/shm'
 if os.path.exists(RAMDISK_PATH) and os.access(RAMDISK_PATH, os.W_OK):
     UPLOAD_FOLDER = os.path.join(RAMDISK_PATH, 'caption_uploads')
@@ -152,23 +152,23 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(PROCESSED_FOLDER, exist_ok=True)
 os.makedirs(FONT_FOLDER, exist_ok=True)
 
-# Font configuration
+
 font_paths_to_try = [
     os.path.join(FONT_FOLDER, "Poppins-Bold.ttf"),
     "Poppins-Bold.ttf",
     os.path.join(FONT_FOLDER, "Arial.ttf"),
     "arial.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Common Linux font
-    "/System/Library/Fonts/Arial.ttf",  # macOS fallback
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  
+    "/System/Library/Fonts/Arial.ttf",  
 ]
 
 logger.debug(f"Looking for fonts in: {FONT_FOLDER}")
 if os.path.exists(FONT_FOLDER):
     logger.debug(f"Font files present: {os.listdir(FONT_FOLDER)}")
 
-# Multiple Whisper models for different use cases
+
 whisper_models = {}
-whisper_model_sizes = ['large-v2', 'medium', 'small']  # Load multiple models
+whisper_model_sizes = ['large-v2', 'medium', 'small']  
 whisper_model_lock = threading.Lock()
 
 def load_whisper_models():
@@ -183,17 +183,17 @@ def load_whisper_models():
                     
                     if device == "cuda" and cuda_available:
                         try:
-                            # Ensure CUDA is properly initialized
+                            
                             torch.cuda.empty_cache()
                             torch.cuda.init()
                             
-                            # Set the device explicitly
+                            
                             torch.cuda.set_device(0)
                             
-                            # Load model with explicit device parameter
+                            
                             model = whisper.load_model(model_size, device="cuda")
                             
-                            # Verify the model is on GPU
+                            
                             model_device = next(model.parameters()).device
                             logger.info(f"Whisper model {model_size} loaded on device: {model_device}")
                             
@@ -202,15 +202,15 @@ def load_whisper_models():
                                 model = model.cuda()
                                 logger.info(f"Moved model {model_size} to GPU: {next(model.parameters()).device}")
                             
-                            # Optimize model for inference
+                            
                             model.eval()
-                            model.half()  # Use FP16 for faster inference
+                            model.half()  
                             
                             whisper_models[model_size] = model
                             
-                            # Warm up each model
+                            
                             logger.info(f"Warming up Whisper model {model_size}...")
-                            dummy_audio = torch.zeros(16000, device="cuda")  # 1 second of audio
+                            dummy_audio = torch.zeros(16000, device="cuda")  
                             with torch.no_grad():
                                 _ = model.transcribe(dummy_audio.cpu().numpy(), fp16=True, verbose=False)
                             torch.cuda.empty_cache()
@@ -231,11 +231,11 @@ def load_whisper_models():
 
 def get_optimal_model_size(duration_seconds):
     """Select optimal Whisper model based on video duration and available resources"""
-    if duration_seconds <= 60:  # Short videos
+    if duration_seconds <= 60:  
         return 'small'
-    elif duration_seconds <= 300:  # Medium videos (5 minutes)
+    elif duration_seconds <= 300:  
         return 'medium'
-    else:  # Long videos
+    else:  
         return 'large-v2'
 
 def ensure_model_on_gpu(model):
@@ -251,51 +251,51 @@ def ensure_model_on_gpu(model):
             logger.error(f"Error ensuring model on GPU: {e}")
     return model
 
-# --- Enhanced Helper Functions ---
+
 def audio_to_text_optimized(wav_path, srt_path, duration_seconds, job_id_log_prefix=""):
     """Enhanced transcription with model selection and GPU optimization"""
     logger.info(f"{job_id_log_prefix} Transcribing {wav_path} to {srt_path} using {device}")
     
     try:
-        # Select optimal model based on duration
+        
         model_size = get_optimal_model_size(duration_seconds)
         
-        # Load models if not already loaded
+        
         if not whisper_models:
             load_whisper_models()
         
         model = whisper_models.get(model_size)
         if model is None:
-            # Fallback to any available model
+            
             model = next(iter(whisper_models.values()))
             logger.warning(f"Fallback to available model instead of {model_size}")
         
         model = ensure_model_on_gpu(model)
         
-        # Log GPU status before transcription
+        
         if device == "cuda" and cuda_available:
             logger.info(f"{job_id_log_prefix} GPU memory before transcription:")
             logger.info(f"  Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
             logger.info(f"  Cached: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
             logger.info(f"  Model device: {next(model.parameters()).device}")
         
-        # Enhanced transcription parameters for high-performance VM
+        
         start_time = time.time()
         
         transcribe_options = {
             'fp16': device == "cuda" and cuda_available,
             'verbose': False,
-            'language': None,  # Auto-detect language
-            'beam_size': 8 if device == "cuda" else 1,  # Larger beam size for accuracy
-            'best_of': 8 if device == "cuda" else 1,  # Multiple candidates
-            'temperature': 0.0,  # Deterministic output
+            'language': None,  
+            'beam_size': 8 if device == "cuda" else 1,  
+            'best_of': 8 if device == "cuda" else 1,  
+            'temperature': 0.0,  
             'compression_ratio_threshold': 2.4,
             'logprob_threshold': -1.0,
             'no_speech_threshold': 0.6,
             'condition_on_previous_text': True,
         }
         
-        # Use mixed precision and optimized memory usage
+        
         with torch.no_grad():
             with torch.cuda.amp.autocast(enabled=cuda_available):
                 result = model.transcribe(wav_path, **transcribe_options)
@@ -303,16 +303,16 @@ def audio_to_text_optimized(wav_path, srt_path, duration_seconds, job_id_log_pre
         processing_time = time.time() - start_time
         logger.info(f"{job_id_log_prefix} Transcription completed in {processing_time:.2f}s using {device} with model {model_size}")
         
-        # Write SRT file with enhanced formatting
+        
         with open(srt_path, 'w', encoding='utf-8') as f:
             for i, segment in enumerate(result["segments"]):
                 start, end, text = segment['start'], segment['end'], segment['text'].strip()
-                if text and len(text) > 1:  # Filter out very short segments
+                if text and len(text) > 1:  
                     f.write(f"{i+1}\n{format_whisper_timestamp(start)} --> {format_whisper_timestamp(end)}\n{text}\n\n")
         
         logger.info(f"{job_id_log_prefix} Transcription complete. SRT saved to {srt_path}")
         
-        # Clean up GPU memory
+        
         if device == "cuda" and cuda_available:
             torch.cuda.empty_cache()
             logger.info(f"{job_id_log_prefix} GPU memory after cleanup:")
@@ -321,7 +321,7 @@ def audio_to_text_optimized(wav_path, srt_path, duration_seconds, job_id_log_pre
             
     except Exception as e:
         logger.error(f"{job_id_log_prefix} Error during transcription: {str(e)}", exc_info=True)
-        # Clean up on error
+        
         if device == "cuda" and cuda_available:
             torch.cuda.empty_cache()
         raise
@@ -336,7 +336,7 @@ def format_whisper_timestamp(seconds):
 
 def get_system_stats():
     """Enhanced system resource monitoring"""
-    cpu_percent = psutil.cpu_percent(interval=1, percpu=True)  # Per-CPU stats
+    cpu_percent = psutil.cpu_percent(interval=1, percpu=True)  
     memory = psutil.virtual_memory()
     disk = psutil.disk_usage('/')
     
@@ -377,7 +377,7 @@ def verify_api_key_middleware():
         logger.warning(f"Unauthorized API key from {request.remote_addr} to {request.path}")
         return jsonify({'error': 'Unauthorized: Invalid API Key'}), 401
 
-# --- Flask Routes ---
+
 @app.route('/gpu-status', methods=['GET'])
 def gpu_status():
     """Enhanced GPU status with performance metrics"""
@@ -407,7 +407,7 @@ def gpu_status():
                 'multiprocessor_count': gpu_info.multi_processor_count if gpu_info else None
             })
             
-            # Check if models are actually on GPU
+            
             models_status = {}
             for model_name, model in whisper_models.items():
                 if model is not None:
@@ -458,7 +458,7 @@ def process_video_directly():
     if not allowed_file(video_file_storage.filename):
         return jsonify({'success': False, 'error': f'File type not allowed. Allowed: {ALLOWED_EXTENSIONS}'}), 400
 
-    # Get caption parameters from form data
+    
     try:
         language = request.form.get('language', 'en')
         font_family = request.form.get('font_family', 'Arial.ttf')
@@ -466,8 +466,8 @@ def process_video_directly():
         font_color = request.form.get('font_color', 'white')
         font_options = {'family': font_family, 'size': font_size, 'color': font_color}
         
-        # Performance options
-        quality_mode = request.form.get('quality_mode', 'balanced')  # fast, balanced, high
+        
+        quality_mode = request.form.get('quality_mode', 'balanced')  
         
     except ValueError:
         return jsonify({'success': False, 'error': 'Invalid font size parameter.'}), 400
@@ -479,7 +479,7 @@ def process_video_directly():
     temp_input_filename = f"{user_id}_{uuid.uuid4().hex}_temp_{original_secure_filename}"
     temp_input_filepath = os.path.join(UPLOAD_FOLDER, temp_input_filename)
 
-    # Define paths for intermediate and final files for this job
+    
     base_name_for_job = temp_input_filename.rsplit('.',1)[0]
     audio_file_path = os.path.join(PROCESSED_FOLDER, f"{base_name_for_job}_audio.wav")
     srt_file_path = os.path.join(PROCESSED_FOLDER, f"{base_name_for_job}_original.srt")
@@ -489,7 +489,7 @@ def process_video_directly():
     files_to_cleanup = [temp_input_filepath, audio_file_path, srt_file_path, translated_srt_file_path, final_output_video_path]
 
     try:
-        # Save file with optimized I/O
+        
         video_file_storage.save(temp_input_filepath)
         logger.info(f"{job_id_log_prefix} File saved temporarily to {temp_input_filepath}")
 
@@ -505,38 +505,32 @@ def process_video_directly():
 
         logger.info(f"{job_id_log_prefix} Video validated. Duration: {duration_seconds:.2f}s. Starting enhanced pipeline on {device}.")
         
-        # Pre-load optimal model
+        
         if not whisper_models:
             load_whisper_models()
         
-        # Ensure GPU is ready before processing
+        
         if device == "cuda" and cuda_available:
             torch.cuda.empty_cache()
-            # Pre-warm GPU
+            
             dummy_tensor = torch.randn(100, 100, device='cuda')
             _ = torch.mm(dummy_tensor, dummy_tensor.t())
             del dummy_tensor
             torch.cuda.empty_cache()
 
-        # --- Execute enhanced processing pipeline ---
         pipeline_start = time.time()
         
-        # Step 1: Audio extraction (parallel-ready)
         extract_audio(temp_input_filepath, audio_file_path, job_id_log_prefix)
         
-        # Step 2: Enhanced transcription with model selection
         audio_to_text_optimized(audio_file_path, srt_file_path, duration_seconds, job_id_log_prefix)
         
-        # Step 3: Translation (if needed)
         translate_srt(srt_file_path, language, translated_srt_file_path, job_id_log_prefix)
         
-        # Step 4: Video processing with captions
         srt_to_use = translated_srt_file_path if os.path.exists(translated_srt_file_path) and os.path.getsize(translated_srt_file_path) > 0 else srt_file_path
         add_captions_to_video(temp_input_filepath, srt_to_use, final_output_video_path, font_options, job_id_log_prefix)
         
         pipeline_time = time.time() - pipeline_start
         logger.info(f"{job_id_log_prefix} Enhanced pipeline completed in {pipeline_time:.2f}s")
-        # --- End of pipeline ---
 
         logger.info(f"{job_id_log_prefix} Processing complete. Output: {final_output_video_path}")
         
@@ -545,7 +539,7 @@ def process_video_directly():
             as_attachment=True,
             download_name=f"captioned_{original_secure_filename}"
         ))
-        # Enhanced response headers
+        
         response.headers['X-Video-Duration-Seconds'] = str(int(duration_seconds))
         response.headers['X-GPU-Used'] = str(device)
         response.headers['X-Processing-Time'] = str(int(pipeline_time))
@@ -562,7 +556,7 @@ def process_video_directly():
         logger.error(f"{job_id_log_prefix} Error during direct processing: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'error': f'An internal error occurred: {str(e)}'}), 500
     finally:
-        # Enhanced cleanup with better error handling
+        
         cleanup_start = time.time()
         for f_path in files_to_cleanup:
             if f_path and os.path.exists(f_path):
@@ -572,10 +566,10 @@ def process_video_directly():
                 except OSError as e_clean:
                     logger.warning(f"{job_id_log_prefix} Could not clean up file {f_path}: {e_clean}")
         
-        # Aggressive GPU memory cleanup
+        
         if device == "cuda" and cuda_available:
             torch.cuda.empty_cache()
-            torch.cuda.synchronize()  # Ensure all operations complete
+            torch.cuda.synchronize()  
         
         cleanup_time = time.time() - cleanup_start
         logger.debug(f"{job_id_log_prefix} Cleanup completed in {cleanup_time:.2f}s")
@@ -595,7 +589,7 @@ def health_check():
 
 if __name__ == '__main__':
 
-    # Test GPU availability first
+    
     logger.info("=== GPU Setup Test ===")
     logger.info(f"PyTorch version: {torch.__version__}")
     logger.info(f"CUDA available: {torch.cuda.is_available()}")
