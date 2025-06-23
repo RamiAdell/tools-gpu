@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-GPU Performance Monitor for Video Caption Service
-Monitors GPU usage, memory consumption, and service performance
-"""
 
 import time
 import json

@@ -8,18 +8,18 @@
 #     container_name: video-caption-gpu
 #     restart: unless-stopped
     
-#     # GPU configuration
+    
 #     runtime: nvidia
 #     environment:
 #       - NVIDIA_VISIBLE_DEVICES=all
 #       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
 #       - CUDA_VISIBLE_DEVICES=0
     
-#     # Service configuration
+    
 #     ports:
 #       - "5003:5003"
     
-#     # Environment variables
+    
 #     environment:
 #       - FLASK_ENV=production
 #       - FLASK_DEBUG=false
@@ -33,13 +33,13 @@
 #       - WHISPER_MODEL_SIZE=small
 #       - TORCH_HOME=/app/.cache/torch
     
-#     # Volume mounts for persistent storage and performance
+    
 #     volumes:
 #       - /tmp/caption_uploads:/tmp/caption_uploads
 #       - /tmp/caption_processed:/tmp/caption_processed
 #       - caption_cache:/app/.cache
     
-#     # Resource limits to prevent GPU memory issues
+    
 #     deploy:
 #       resources:
 #         reservations:
@@ -48,7 +48,7 @@
 #               count: 1
 #               capabilities: [gpu]
     
-#     # Health check
+    
 #     healthcheck:
 #       test: ["CMD", "curl", "-f", "http://localhost:5003/health"]
 #       interval: 30s
@@ -56,7 +56,7 @@
 #       retries: 3
 #       start_period: 60s
     
-#     # Logging configuration
+    
 #     logging:
 #       driver: "json-file"
 #       options:
@@ -67,9 +67,9 @@
 #   caption_cache:
 #     driver: local
 
-# # Alternative configuration for systems without nvidia-docker runtime
-# # Use this if you're running on a system with newer Docker versions
----
+
+
+
 version: '3.8'
 
 services:
@@ -80,7 +80,7 @@ services:
     container_name: video-caption-gpu-alt
     restart: unless-stopped
     
-    # GPU configuration for newer Docker versions
+    
     deploy:
       resources:
         reservations:
