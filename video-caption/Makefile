@@ -10,5 +10,5 @@ down:
 down-v:
 	docker compose -f local.yml down -v
 
-nexmedia-config:
+config:
 	docker compose -f local.yml config
